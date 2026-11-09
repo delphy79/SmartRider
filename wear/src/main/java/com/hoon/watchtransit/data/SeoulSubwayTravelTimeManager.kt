@@ -353,7 +353,7 @@ object SeoulSubwayTravelTimeManager {
     /**
      * 시간표 기반 도착 예정 열차에 대해 현재 시각과 역간 소요시간 그래프를 이용하여
      * 현재 몇 번째 전역(어느 역)에 위치하는지 역산
-     * 단, 조회 역이 해당 열차의 출발역(시발역)인 경우 전역이 없으므로 "출발 대기" 반환
+     * 단, 조회 역이 출발역이거나 아직 출발역 출발 시각 전인 경우 "출발 대기 (출발역명)" 반환
      */
     fun estimatePositionByRemainSeconds(
         context: Context?,
@@ -401,6 +401,7 @@ object SeoulSubwayTravelTimeManager {
                     var cumSec = 0
                     var chosenHops = 1
                     var chosenStn = upstreamPath[1]
+                    var reachedOriginBeforeDeparture = true
 
                     for (i in 1 until upstreamPath.size) {
                         val u = upstreamPath[i - 1]
@@ -410,10 +411,16 @@ object SeoulSubwayTravelTimeManager {
                         chosenHops = i
                         chosenStn = v
                         if (cumSec >= remainSeconds) {
+                            reachedOriginBeforeDeparture = false
                             break
                         }
                     }
-                    return "[$chosenHops]번째 전역 ($chosenStn)"
+                    // 남은 시간이 시발역까지의 총 소요시간보다 크면 아직 시발역에서 출발하기 전 상태
+                    return if (reachedOriginBeforeDeparture && remainSeconds > cumSec) {
+                        "출발 대기 ($chosenStn)"
+                    } else {
+                        "[$chosenHops]번째 전역 ($chosenStn)"
+                    }
                 } else if (endCanonical != null && endCanonical != targetCanonical) {
                     // 종착역 반대 방향으로 이전 역이 존재하지 않는 시발역인 경우
                     return if (remainSeconds <= 60) "당역 도착 ($targetCanonical)" else "출발 대기 ($targetCanonical)"

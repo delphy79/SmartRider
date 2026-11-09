@@ -228,7 +228,7 @@ object ArexTimetableManager {
     /**
      * 현재 시각(nowSec)과 시간표상의 다른 역 도착/출발 시각들을 비교하여
      * 해당 열차가 현재 몇 번째 전역(어느 역)에 있는지 계산
-     * 단, 조회 역이 해당 열차의 출발역(시발역)인 경우 전역이 없으므로 "출발 대기" 표출
+     * 단, 조회 역이 출발역이거나 아직 출발역 출발 시각 전인 경우 "출발 대기 (출발역명)" 표출
      */
     private fun calculateTrainPositionDetail(
         row: TrainScheduleRow,
@@ -254,10 +254,10 @@ object ArexTimetableManager {
             return "당역 진입 ($targetStation)"
         }
 
+        // 아직 출발역에서 출발하기 전인 경우
         if (nowSec < routeStops[0].second) {
-            val hops = targetIdx
             val startStn = routeStops[0].first
-            return "[$hops]번째 전역 ($startStn)"
+            return "출발 대기 ($startStn)"
         }
 
         var currentIdx = 0
