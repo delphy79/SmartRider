@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmartRider - Watch UI Simulator</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        body {
+            background-color: #121212;
+            color: #ffffff;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
+            margin: 0;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .header h1 {
+            margin: 0 0 6px 0;
+            font-size: 22px;
+            color: #64B5F6;
+        }
+        .header p {
+            margin: 0;
+            font-size: 13px;
+            color: #9E9E9E;
+        }
+        .container {
+            display: flex;
+            gap: 40px;
+            align-items: center;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        /* 갤럭시 워치6 실물 프레임 (400px 디스플레이) */
+        .watch-bezel {
+            width: 440px;
+            height: 440px;
+            background: radial-gradient(circle, #2a2a2a 60%, #151515 95%, #050505 100%);
+            border-radius: 50%;
+            padding: 20px;
+            box-shadow: 0 16px 36px rgba(0, 0, 0, 0.7), inset 0 2px 4px rgba(255, 255, 255, 0.15), 0 0 0 4px #1e1e1e;
+            position: relative;
+        }
+        /* 실제 워치 원형 화면 (400px x 400px) */
+        .watch-screen {
+            width: 400px;
+            height: 400px;
+            background-color: #000000;
+            border-radius: 50%;
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        /* 상단 시스템 시간 (TimeText) */
+        .time-text {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            font-size: 14px;
+            font-weight: 600;
+            color: #E0E0E0;
+            letter-spacing: 0.5px;
+            z-index: 10;
+        }
+        /* 상단(노선명/행선지)은 내리고, 하단(역명/목록버튼)은 올린 컨테이너 */
+        .grid-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            padding: 34px 16px 26px 16px; /* 상단 여백 34px, 하단 여백 26px로 중앙 집중 */
+            position: relative;
+            z-index: 5;
+        }
+        /* 1, 2, 4, 5구간 (각 1f) */
+        .slot-1f {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            width: 100%;
+            position: relative;
+        }
+        /* 3구간: 도착 시간 (2f, 화면 정중앙 50%) */
+        .slot-2f {
+            flex: 2;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            width: 100%;
+            position: relative;
+        }
+        /* 첨부 이미지 실측 비율에 맞춘 정확한 폰트 스타일 */
+        .text-line {
+            font-size: 16px;
+            font-weight: 700;
+            color: #64B5F6;
+            white-space: nowrap;
+        }
+        .text-dest {
+            font-size: 32px;
+            font-weight: 700;
+            color: #FFFFFF;
+            white-space: nowrap;
+            letter-spacing: -0.5px;
+        }
+        .text-time {
+            font-size: 48px;
+            font-weight: 900;
+            color: #69F0AE;
+            white-space: nowrap;
+            letter-spacing: -1px;
+            cursor: pointer;
+            transition: color 0.2s;
+        }
+        .text-time.soon {
+            color: #FF5252;
+        }
+        .text-station {
+            font-size: 18px;
+            font-weight: 600;
+            color: #DDDDDD;
+            white-space: nowrap;
+        }
+        /* 목록 버튼 */
+        .btn-list {
+            padding: 5px 24px;
+            border-radius: 8px;
+            border: 1.2px solid rgba(255, 255, 255, 0.85);
+            background: transparent;
+            color: #FFFFFF;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s, transform 0.1s;
+        }
+        .btn-list:hover {
+            background: rgba(255, 255, 255, 0.15);
+        }
+        .btn-list:active {
+            transform: scale(0.96);
+        }
+        /* 빨간 가이드선 오버레이 (첨부 이미지의 6등분 선과 100% 일치) */
+        .red-guide-lines {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 20;
+            display: none;
+        }
+        .red-guide-lines.active {
+            display: block;
+        }
+        .guide-line {
+            position: absolute;
+            left: 0;
+            width: 100%;
+            height: 1.5px;
+            background-color: rgba(255, 0, 0, 0.85);
+        }
+        /* 컨트롤 패널 */
+        .panel {
+            background-color: #1e1e1e;
+            border-radius: 14px;
+            padding: 20px 24px;
+            width: 330px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+        }
+        .panel h3 {
+            margin: 0 0 14px 0;
+            font-size: 16px;
+            color: #FFFFFF;
+            border-bottom: 1px solid #333;
+            padding-bottom: 8px;
+        }
+        .form-group {
+            margin-bottom: 14px;
+        }
+        .form-group label {
+            display: block;
+            font-size: 12px;
+            color: #B0BEC5;
+            margin-bottom: 4px;
+        }
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 8px 10px;
+            background-color: #2a2a2a;
+            border: 1px solid #444;
+            border-radius: 6px;
+            color: #FFF;
+            font-size: 13px;
+        }
+        .form-group input:focus, .form-group select:focus {
+            outline: none;
+            border-color: #64B5F6;
+        }
+        .btn-toggle {
+            width: 100%;
+            padding: 10px;
+            border: none;
+            border-radius: 6px;
+            background-color: #D32F2F;
+            color: #FFF;
+            font-weight: 600;
+            font-size: 13px;
+            cursor: pointer;
+            margin-top: 6px;
+        }
+        .btn-toggle:hover {
+            background-color: #B71C1C;
+        }
+        .preset-buttons {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        .preset-btn {
+            padding: 7px;
+            background-color: #333;
+            border: 1px solid #555;
+            border-radius: 6px;
+            color: #DDD;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        .preset-btn:hover {
+            background-color: #444;
+            color: #FFF;
+        }
+        .note {
+            margin-top: 12px;
+            padding: 8px 10px;
+            background-color: #263238;
+            border-left: 3px solid #64B5F6;
+            font-size: 11px;
+            color: #ECEFF1;
+            line-height: 1.4;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h1>SmartRider 워치 UI 시뮬레이터</h1>
+        <p>요청하신 대로 상단 글자는 아래로 내리고, 하단 글자 및 버튼은 위로 올려 균형을 맞췄습니다.</p>
+    </div>
+
+    <div class="container">
+        <!-- 워치 본체 -->
+        <div class="watch-bezel">
+            <div class="watch-screen">
+                <!-- 상단 실시간 시각 -->
+                <div class="time-text" id="sysTime">14:04</div>
+
+                <!-- 빨간색 가이드선 (첨부 이미지 검증용 6등분선) -->
+                <div class="red-guide-lines" id="guideLines">
+                    <div class="guide-line" style="top: 0%;"></div>
+                    <div class="guide-line" style="top: 16.66%;"></div>
+                    <div class="guide-line" style="top: 33.33%;"></div>
+                    <div class="guide-line" style="top: 50.00%; height: 2px; background: #FF1744;"></div>
+                    <div class="guide-line" style="top: 66.66%;"></div>
+                    <div class="guide-line" style="top: 83.33%;"></div>
+                    <div class="guide-line" style="bottom: 0%;"></div>
+                </div>
+
+                <!-- 1:1:2:1:1 6등분 컨테이너 -->
+                <div class="grid-container">
+                    <!-- 1. 노선명 (상단에서 자연스럽게 내려옴) -->
+                    <div class="slot-1f">
+                        <span class="text-line" id="txtLine">① 4호선</span>
+                    </div>
+
+                    <!-- 2. 행선지 (상단에서 자연스럽게 내려옴) -->
+                    <div class="slot-1f">
+                        <span class="text-dest" id="txtDest">불암산행</span>
+                    </div>
+
+                    <!-- 3. 도착 시간 (비율 2f, 화면 정중앙 50% 가로 90% 채움) -->
+                    <div class="slot-2f">
+                        <span class="text-time" id="txtTime">10분 10초</span>
+                    </div>
+
+                    <!-- 4. 역명 (하단에서 자연스럽게 위로 올라옴) -->
+                    <div class="slot-1f">
+                        <span class="text-station" id="txtStation">정부과천청사</span>
+                    </div>
+
+                    <!-- 5. 목록 버튼 (하단 가장자리에서 자연스럽게 위로 올라옴) -->
+                    <div class="slot-1f">
+                        <button class="btn-list" onclick="alert('목록 화면으로 전환')">목록</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 컨트롤 패널 -->
+        <div class="panel">
+            <h3>미리보기 실시간 컨트롤</h3>
+
+            <div class="form-group">
+                <label>1. 노선명 (상단 보조)</label>
+                <input type="text" id="inputLine" value="① 4호선" oninput="updateUI()">
+            </div>
+            <div class="form-group">
+                <label>2. 행선지 / 방면 (강조 타이틀)</label>
+                <input type="text" id="inputDest" value="불암산행" oninput="updateUI()">
+            </div>
+            <div class="form-group">
+                <label>3. 도착 시간 (정중앙 메인)</label>
+                <input type="text" id="inputTime" value="10분 10초" oninput="updateUI()">
+            </div>
+            <div class="form-group">
+                <label>4. 역 / 정류소명 (하단 보조)</label>
+                <input type="text" id="inputStation" value="정부과천청사" oninput="updateUI()">
+            </div>
+
+            <button class="btn-toggle" onclick="toggleGuides()">빨간 가이드선 ON/OFF</button>
+
+            <div style="margin-top: 14px;">
+                <label style="font-size: 12px; color: #B0BEC5;">프리셋 바로가기:</label>
+                <div class="preset-buttons">
+                    <button class="preset-btn" onclick="applyPreset('과천')">4호선 정부과천</button>
+                    <button class="preset-btn" onclick="applyPreset('사당')">4호선 사당(1분30초)</button>
+                    <button class="preset-btn" onclick="applyPreset('신검단')">인천1호선 신검단</button>
+                    <button class="preset-btn" onclick="applyPreset('없음')">도착 정보 없음</button>
+                </div>
+            </div>
+
+            <div class="note">
+                💡 상단 2줄(노선명, 행선지)을 아래로 내리고 하단 2줄(역명, 목록 버튼)을 위로 올려, 워치 둥근 테두리에 끼이지 않고 중앙 시간을 중심으로 균형감 있게 배치했습니다.
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 시계 갱신
+        function updateClock() {
+            const now = new Date();
+            const h = String(now.getHours()).padStart(2, '0');
+            const m = String(now.getMinutes()).padStart(2, '0');
+            document.getElementById('sysTime').innerText = `${h}:${m}`;
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
+
+        // 텍스트 너비 가중치 기반 동적 스케일링 (안드로이드 getFittedFontSize와 1:1 동기화)
+        function getFittedFontSize(text, targetMaxPx, targetMinPx, maxAvailableWidthPx) {
+            if (!text) return targetMaxPx;
+            let weightedLength = 0;
+            for (let ch of text) {
+                if (/[가-힣ㄱ-ㅎ]/.test(ch)) weightedLength += 1.0;
+                else if (/[0-9]/.test(ch)) weightedLength += 0.58;
+                else if (/[:., ]/.test(ch)) weightedLength += 0.32;
+                else if (/[a-zA-Z]/.test(ch)) weightedLength += 0.55;
+                else if (/[()[\]]/.test(ch)) weightedLength += 0.4;
+                else weightedLength += 0.8;
+            }
+            const calculatedPx = maxAvailableWidthPx / weightedLength;
+            return Math.min(targetMaxPx, Math.max(targetMinPx, calculatedPx));
+        }
+
+        function updateUI() {
+            const line = document.getElementById('inputLine').value;
+            const dest = document.getElementById('inputDest').value;
+            const time = document.getElementById('inputTime').value;
+            const station = document.getElementById('inputStation').value;
+
+            const elLine = document.getElementById('txtLine');
+            const elDest = document.getElementById('txtDest');
+            const elTime = document.getElementById('txtTime');
+            const elStation = document.getElementById('txtStation');
+
+            elLine.innerText = line;
+            elDest.innerText = dest;
+            elTime.innerText = time;
+            elStation.innerText = station;
+
+            // 실측 이미지 비율을 반영한 픽셀 크기 적용 (가로 폭 360px 한 줄 기준)
+            elLine.style.fontSize = getFittedFontSize(line, 16, 12, 170) + 'px';
+            elDest.style.fontSize = getFittedFontSize(dest, 32, 18, 220) + 'px';
+            elTime.style.fontSize = getFittedFontSize(time, 50, 22, 260) + 'px';
+            elStation.style.fontSize = getFittedFontSize(station, 18, 13, 200) + 'px';
+
+            // '곧 도착' 또는 1분 미만 시 빨간색
+            if (time.includes('곧') || time.includes('진입') || time.includes('도착')) {
+                elTime.classList.add('soon');
+            } else {
+                elTime.classList.remove('soon');
+            }
+        }
+
+        function toggleGuides() {
+            const g = document.getElementById('guideLines');
+            g.classList.toggle('active');
+        }
+
+        function applyPreset(type) {
+            if (type === '과천') {
+                document.getElementById('inputLine').value = '① 4호선';
+                document.getElementById('inputDest').value = '불암산행';
+                document.getElementById('inputTime').value = '10분 10초';
+                document.getElementById('inputStation').value = '정부과천청사';
+            } else if (type === '사당') {
+                document.getElementById('inputLine').value = '① 4호선';
+                document.getElementById('inputDest').value = '당고개행';
+                document.getElementById('inputTime').value = '1분 30초';
+                document.getElementById('inputStation').value = '사당역';
+            } else if (type === '신검단') {
+                document.getElementById('inputLine').value = '① 인천1호선';
+                document.getElementById('inputDest').value = '검단호수공원행';
+                document.getElementById('inputTime').value = '12:45';
+                document.getElementById('inputStation').value = '신검단중앙역';
+            } else if (type === '없음') {
+                document.getElementById('inputLine').value = '① 4호선';
+                document.getElementById('inputDest').value = '오이도행';
+                document.getElementById('inputTime').value = '도착 정보 없음';
+                document.getElementById('inputStation').value = '정부과천청사';
+            }
+            updateUI();
+        }
+
+        // 초기 실행
+        updateUI();
+    </script>
+</body>
+</html>

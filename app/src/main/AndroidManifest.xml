@@ -1,0 +1,25 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 1. 인터넷 통신 권한 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- 2. android:usesCleartextTraffic="true" 필수 추가 -->
+    <application
+            android:allowBackup="true"
+            android:usesCleartextTraffic="true"
+            android:label="WatchTransit"
+            android:icon="@mipmap/ic_launcher"
+            android:roundIcon="@mipmap/ic_launcher_round"
+            android:supportsRtl="true"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar">
+
+        <activity
+                android:name=".MainActivity"
+                android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
