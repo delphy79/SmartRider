@@ -175,6 +175,16 @@ class ArrivalRepository(private val context: Context? = null) {
         }
 
         val targetSubwayId = getSubwayIdFromLineName(target.subCode)
+        val isArexTerminalOrigin = (targetSubwayId == "1065" || ArexTimetableManager.isArex(target)) &&
+                (cleanName == "서울" || cleanName == "인천공항2터미널")
+
+        // 공항철도 시발역(서울역, 인천공항2터미널역)은 출발 시간표가 가장 정확하며 전역이 없으므로 공식 시간표 우선 적용
+        if (isArexTerminalOrigin && context != null) {
+            val arexArrivals = ArexTimetableManager.getArrivals(context, target)
+            if (arexArrivals.isNotEmpty()) {
+                return arexArrivals.take(2)
+            }
+        }
 
         // 2. 서울교통공사 실시간 도착정보 조회 (공항철도, 서울 1~9호선, 인천1·2호선, 수인분당선, 경의중앙선 등)
         val realtimeList = runCatching {
@@ -185,13 +195,16 @@ class ArrivalRepository(private val context: Context? = null) {
                     if (targetSubwayId.isNotEmpty()) item.subwayId == targetSubwayId
                     else true
                 }
-                // 2) 이미 출발하여 떠나간 열차 제외 (단, '전역 출발'은 곧 도착할 열차이므로 보존)
+                // 2) 이미 출발하여 떠나간 열차 및 당역 종착 열차(예: 서울역에서 '서울행') 제외
                 .filterNot { item ->
-                    item.arvlCd == "2" || (item.arvlMsg2.contains("출발") && !item.arvlMsg2.contains("전역"))
+                    val bstatnClean = item.bstatnNm.removeSuffix("역").trim()
+                    val isTerminatingHere = bstatnClean == cleanName || item.trainLineNm.trim().startsWith("${cleanName}행")
+                    val hasDeparted = item.arvlCd == "2" || (item.arvlMsg2.contains("출발") && !item.arvlMsg2.contains("전역"))
+                    isTerminatingHere || hasDeparted
                 }
                 // 3) 사용자 방향/행선지 필터 적용
                 .filter { item ->
-                    if (filter.isEmpty() || filter == "양방향") true
+                    if (filter.isEmpty() || filter == "양방향" || isArexTerminalOrigin) true
                     else item.trainLineNm.contains(filter) || item.updnLine.contains(filter) ||
                             (item.bstatnNm.isNotEmpty() && item.bstatnNm.contains(filter))
                 }
@@ -260,6 +273,18 @@ class ArrivalRepository(private val context: Context? = null) {
         val msg = item.arvlMsg2.trim()
         val stn = item.arvlMsg3.trim().ifBlank {
             Regex("""\(([^)]+)\)""").find(msg)?.groupValues?.get(1)?.trim() ?: ""
+        }
+        val cleanStn = stn.removeSuffix("역").trim()
+        val cleanTarget = targetStationName.removeSuffix("역").trim()
+
+        // 공항철도 서울역·인천공항2터미널역 등 시발역이거나 열차 현재 역이 조회 역과 동일한 경우 전역이 없음
+        if ((item.subwayId == "1065" && (cleanTarget == "서울" || cleanTarget == "인천공항2터미널")) ||
+            (cleanStn.isNotEmpty() && cleanStn == cleanTarget)) {
+            return when (item.arvlCd) {
+                "0" -> "당역 진입 ($cleanTarget)"
+                "1" -> "당역 도착 ($cleanTarget)"
+                else -> "출발 대기 ($cleanTarget)"
+            }
         }
 
         // 1) 이미 "[3]번째 전역 (범계)" 형식이면 그대로 반환
@@ -394,6 +419,7 @@ class ArrivalRepository(private val context: Context? = null) {
         val stationCd = target.targetCode.trim()
         if (stationCd.isEmpty()) return emptyList()
 
+        val cleanTargetName = target.name.removeSuffix("역").trim()
         val weekTag = getWeekTag()
         val filter = target.directionOrRoute.trim()
         val lineName = target.subCode.ifEmpty { "지하철" }
@@ -442,6 +468,12 @@ class ArrivalRepository(private val context: Context? = null) {
             val directionName = if (inout == "1") "상행" else "하행"
 
             rows.mapNotNullTo(candidatePairs) { item ->
+                // 당역 종착 열차는 탑승 불가하므로 제외
+                val cleanEnd = item.subwayEname.removeSuffix("역").trim()
+                if (cleanEnd.isNotEmpty() && cleanEnd == cleanTargetName) {
+                    return@mapNotNullTo null
+                }
+
                 val timeStr = item.leftTime.ifEmpty { item.arriveTime }
                 val parts = timeStr.split(":").mapNotNull { it.toIntOrNull() }
                 if (parts.size < 2) return@mapNotNullTo null
@@ -581,6 +613,7 @@ class ArrivalRepository(private val context: Context? = null) {
 
         val results = mutableListOf<Pair<Int, ArrivalInfo>>()
         for ((dir, destTitle) in destinations) {
+            if (destTitle.removeSuffix("행") == name) continue
             if (filter.isNotEmpty() && filter != "양방향" && !filter.contains(dir) && !destTitle.contains(filter)) {
                 continue
             }

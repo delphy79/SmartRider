@@ -102,7 +102,12 @@ object IncheonTimetableManager {
                 (lineNum == 1 && (filter.contains("송도") || filter.contains("동막") || filter.contains("신연수") || filter.contains("예술회관"))) ||
                 (lineNum == 2 && (filter.contains("운연") || filter.contains("인천대공원") || filter.contains("주안")))
 
+        val isNorthTerminal = targetStation == "검단호수공원" || targetStation == "검단오류"
+        val isSouthTerminal = targetStation == "송도달빛축제공원" || targetStation == "운연"
+
         val checkUp = when {
+            isNorthTerminal -> false
+            isSouthTerminal -> true
             filter.isEmpty() || filter == "양방향" -> true
             isUpFilter -> true
             isDownFilter -> false
@@ -110,17 +115,21 @@ object IncheonTimetableManager {
         }
 
         val checkDown = when {
+            isNorthTerminal -> true
+            isSouthTerminal -> false
             filter.isEmpty() || filter == "양방향" -> true
             isDownFilter -> true
             isUpFilter -> false
             else -> true
         }
 
+        val effectiveFilter = if (isNorthTerminal || isSouthTerminal) "" else filter
+
         if (checkUp && upData != null) {
-            candidatePairs.addAll(findUpcomingTrains(upData, targetStation, "상행", lineName, nowSec, filter))
+            candidatePairs.addAll(findUpcomingTrains(upData, targetStation, "상행", lineName, nowSec, effectiveFilter))
         }
         if (checkDown && downData != null) {
-            candidatePairs.addAll(findUpcomingTrains(downData, targetStation, "하행", lineName, nowSec, filter))
+            candidatePairs.addAll(findUpcomingTrains(downData, targetStation, "하행", lineName, nowSec, effectiveFilter))
         }
 
         val sorted = candidatePairs.sortedBy { it.first }
@@ -156,6 +165,11 @@ object IncheonTimetableManager {
         val results = mutableListOf<Pair<Int, ArrivalInfo>>()
 
         for (row in data.rows) {
+            // 당역 종착 열차는 탑승 대상이 아니므로 제외
+            if (canonicalStationName(row.endStation) == station) {
+                continue
+            }
+
             val tStr = row.stopTimes[station] ?: continue
             val tSec = parseTimeToDaySeconds(tStr) ?: continue
 
@@ -197,6 +211,7 @@ object IncheonTimetableManager {
     /**
      * 현재 시각(nowSec)과 시간표상의 다른 역 도착/출발 시각들을 비교하여
      * 해당 열차가 현재 몇 번째 전역(어느 역)에 있는지 계산
+     * 단, 조회 역이 해당 열차의 출발역(시발역)인 경우 전역이 없으므로 "출발 대기" 표출
      */
     private fun calculateTrainPositionDetail(
         row: TrainScheduleRow,
@@ -204,6 +219,10 @@ object IncheonTimetableManager {
         targetSec: Int,
         nowSec: Int
     ): String {
+        if (canonicalStationName(row.startStation) == targetStation) {
+            return if (targetSec - nowSec <= 60) "당역 도착 ($targetStation)" else "출발 대기 ($targetStation)"
+        }
+
         val routeStops = row.stopTimes.mapNotNull { (stn, timeStr) ->
             val sec = parseTimeToDaySeconds(timeStr) ?: return@mapNotNull null
             if (sec <= targetSec) Pair(stn, sec) else null
@@ -211,7 +230,7 @@ object IncheonTimetableManager {
 
         val targetIdx = routeStops.indexOfLast { it.first == targetStation }
         if (targetIdx <= 0) {
-            return if (targetSec - nowSec <= 30) "당역 도착 ($targetStation)" else "출발 대기 ($targetStation)"
+            return if (targetSec - nowSec <= 60) "당역 도착 ($targetStation)" else "출발 대기 ($targetStation)"
         }
 
         if (targetSec - nowSec <= 20) {
@@ -259,6 +278,9 @@ object IncheonTimetableManager {
         var earliestInfo: ArrivalInfo? = null
 
         for ((dir, row) in allRows) {
+            if (canonicalStationName(row.endStation) == station) {
+                continue
+            }
             val tStr = row.stopTimes[station] ?: continue
             val tSec = parseTimeToDaySeconds(tStr) ?: continue
             if (tSec < earliestTimeSec) {

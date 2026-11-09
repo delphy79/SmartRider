@@ -114,7 +114,10 @@ object ArexTimetableManager {
                 filter.contains("공항") || filter.contains("인천") ||
                 filter.contains("검암") || filter.contains("운서") || filter.contains("청라")
 
+        // 시발/종착역인 서울역에서는 인천공항 방면(downData)만 출발하고, 인천공항2터미널역에서는 서울 방면(upData)만 출발함
         val checkUp = when {
+            targetStation == "서울" -> false
+            targetStation == "인천공항2터미널" -> true
             filter.isEmpty() || filter == "양방향" -> true
             isUpFilter -> true
             isDownFilter -> false
@@ -122,17 +125,21 @@ object ArexTimetableManager {
         }
 
         val checkDown = when {
+            targetStation == "서울" -> true
+            targetStation == "인천공항2터미널" -> false
             filter.isEmpty() || filter == "양방향" -> true
             isDownFilter -> true
             isUpFilter -> false
             else -> true
         }
 
+        val effectiveFilter = if (targetStation == "서울" || targetStation == "인천공항2터미널") "" else filter
+
         if (checkUp && upData != null) {
-            candidatePairs.addAll(findUpcomingTrains(upData, targetStation, "상행", lineName, nowSec, filter))
+            candidatePairs.addAll(findUpcomingTrains(upData, targetStation, "상행", lineName, nowSec, effectiveFilter))
         }
         if (checkDown && downData != null) {
-            candidatePairs.addAll(findUpcomingTrains(downData, targetStation, "하행", lineName, nowSec, filter))
+            candidatePairs.addAll(findUpcomingTrains(downData, targetStation, "하행", lineName, nowSec, effectiveFilter))
         }
 
         val sorted = candidatePairs.sortedBy { it.first }
@@ -168,6 +175,11 @@ object ArexTimetableManager {
         val results = mutableListOf<Pair<Int, ArrivalInfo>>()
 
         for (row in data.rows) {
+            // 당역 종착 열차는 탑승 대상이 아니므로 제외
+            if (canonicalStationName(row.endStation) == station) {
+                continue
+            }
+
             val isExpress = row.trainNo.startsWith("A1")
             // 직통열차(A1xxx)는 서울역, 인천공항1터미널, 인천공항2터미널 외의 중간역은 무정차 통과하므로 제외
             if (isExpress && !EXPRESS_STOP_STATIONS.contains(station)) {
@@ -216,6 +228,7 @@ object ArexTimetableManager {
     /**
      * 현재 시각(nowSec)과 시간표상의 다른 역 도착/출발 시각들을 비교하여
      * 해당 열차가 현재 몇 번째 전역(어느 역)에 있는지 계산
+     * 단, 조회 역이 해당 열차의 출발역(시발역)인 경우 전역이 없으므로 "출발 대기" 표출
      */
     private fun calculateTrainPositionDetail(
         row: TrainScheduleRow,
@@ -223,6 +236,10 @@ object ArexTimetableManager {
         targetSec: Int,
         nowSec: Int
     ): String {
+        if (canonicalStationName(row.startStation) == targetStation) {
+            return if (targetSec - nowSec <= 60) "당역 도착 ($targetStation)" else "출발 대기 ($targetStation)"
+        }
+
         val routeStops = row.stopTimes.mapNotNull { (stn, timeStr) ->
             val sec = parseTimeToDaySeconds(timeStr) ?: return@mapNotNull null
             if (sec <= targetSec) Pair(stn, sec) else null
@@ -230,7 +247,7 @@ object ArexTimetableManager {
 
         val targetIdx = routeStops.indexOfLast { it.first == targetStation }
         if (targetIdx <= 0) {
-            return if (targetSec - nowSec <= 30) "당역 도착 ($targetStation)" else "출발 대기 ($targetStation)"
+            return if (targetSec - nowSec <= 60) "당역 도착 ($targetStation)" else "출발 대기 ($targetStation)"
         }
 
         if (targetSec - nowSec <= 20) {
@@ -276,6 +293,9 @@ object ArexTimetableManager {
         var earliestInfo: ArrivalInfo? = null
 
         for ((dir, row) in allRows) {
+            if (canonicalStationName(row.endStation) == station) {
+                continue
+            }
             val isExpress = row.trainNo.startsWith("A1")
             if (isExpress && !EXPRESS_STOP_STATIONS.contains(station)) {
                 continue

@@ -353,6 +353,7 @@ object SeoulSubwayTravelTimeManager {
     /**
      * 시간표 기반 도착 예정 열차에 대해 현재 시각과 역간 소요시간 그래프를 이용하여
      * 현재 몇 번째 전역(어느 역)에 위치하는지 역산
+     * 단, 조회 역이 해당 열차의 출발역(시발역)인 경우 전역이 없으므로 "출발 대기" 반환
      */
     fun estimatePositionByRemainSeconds(
         context: Context?,
@@ -363,8 +364,11 @@ object SeoulSubwayTravelTimeManager {
         remainSeconds: Int
     ): String {
         val cleanTarget = targetStationRaw.removeSuffix("역").trim()
-        if (remainSeconds <= 20) {
-            return if (cleanTarget.isNotEmpty()) "당역 진입 ($cleanTarget)" else "당역 진입"
+        val cleanStart = startStationRaw.replace(Regex("""\(.*?\)"""), "").removeSuffix("행").removeSuffix("역").trim()
+
+        // 출발역과 조회역이 동일한 경우 시발역이므로 전역이 없음
+        if (cleanStart.isNotEmpty() && cleanStart == cleanTarget) {
+            return if (remainSeconds <= 60) "당역 도착 ($cleanTarget)" else "출발 대기 ($cleanTarget)"
         }
 
         if (context != null && lineNum != null) {
@@ -374,12 +378,26 @@ object SeoulSubwayTravelTimeManager {
 
             if (adj != null && targetCanonical != null && adj.containsKey(targetCanonical)) {
                 val startCanonical = startStationRaw.takeIf { it.isNotBlank() }
+                    ?.replace(Regex("""\(.*?\)"""), "")
                     ?.let { resolveCanonicalStationName(lineNum, it.removeSuffix("행").trim()) }
                 val endCanonical = endStationRaw.takeIf { it.isNotBlank() }
+                    ?.replace(Regex("""\(.*?\)"""), "")
                     ?.let { resolveCanonicalStationName(lineNum, it.removeSuffix("행").trim()) }
+
+                if (startCanonical != null && startCanonical == targetCanonical) {
+                    return if (remainSeconds <= 60) "당역 도착 ($targetCanonical)" else "출발 대기 ($targetCanonical)"
+                }
+
+                // 시발/종착 단말역(이웃이 1개뿐인 역)에서 다른 역(endCanonical)으로 출발하는 열차인 경우 전역이 없음
+                if ((adj[targetCanonical]?.size ?: 0) <= 1 && endCanonical != null && endCanonical != targetCanonical) {
+                    return if (remainSeconds <= 60) "당역 도착 ($targetCanonical)" else "출발 대기 ($targetCanonical)"
+                }
 
                 val upstreamPath = buildUpstreamPath(adj, targetCanonical, startCanonical, endCanonical)
                 if (upstreamPath.size >= 2) {
+                    if (remainSeconds <= 20) {
+                        return "당역 진입 ($targetCanonical)"
+                    }
                     var cumSec = 0
                     var chosenHops = 1
                     var chosenStn = upstreamPath[1]
@@ -396,8 +414,15 @@ object SeoulSubwayTravelTimeManager {
                         }
                     }
                     return "[$chosenHops]번째 전역 ($chosenStn)"
+                } else if (endCanonical != null && endCanonical != targetCanonical) {
+                    // 종착역 반대 방향으로 이전 역이 존재하지 않는 시발역인 경우
+                    return if (remainSeconds <= 60) "당역 도착 ($targetCanonical)" else "출발 대기 ($targetCanonical)"
                 }
             }
+        }
+
+        if (remainSeconds <= 20) {
+            return if (cleanTarget.isNotEmpty()) "당역 진입 ($cleanTarget)" else "당역 진입"
         }
 
         val fallbackHops = maxOf(1, (remainSeconds + 60) / 120)
@@ -407,6 +432,7 @@ object SeoulSubwayTravelTimeManager {
     /**
      * 조회 역(targetCanonical)에서 열차가 달려오는 이전 역 방향(upstream)으로의 역 리스트 반환
      * 반환 리스트: [targetCanonical, 1번째전역, 2번째전역, ...]
+     * 만약 targetCanonical이 시발역이어서 이전 역이 없으면 [targetCanonical] (size 1) 반환
      */
     private fun buildUpstreamPath(
         adj: Map<String, Map<String, Int>>,
@@ -420,7 +446,7 @@ object SeoulSubwayTravelTimeManager {
             if (bfsPath.size >= 2) return bfsPath
         }
 
-        // 2) 종착역(endCanonical)을 아는 경우: 종착역으로부터 멀어지는 방향의 이웃 역들을 따라 역추적
+        // 2) 종착역(endCanonical)을 아는 경우: 종착역으로부터 거리가 멀어지는 방향(열차가 달려온 이전 역 방향)으로만 역추적
         if (endCanonical != null && adj.containsKey(endCanonical)) {
             val distToEnd = computeHopDistancesFrom(adj, endCanonical)
             val result = mutableListOf(targetCanonical)
@@ -430,18 +456,17 @@ object SeoulSubwayTravelTimeManager {
             while (result.size <= 40) {
                 val currDist = distToEnd[curr] ?: break
                 val neighbors = adj[curr]?.keys ?: break
-                // 종착역까지의 거리가 현재 역보다 더 먼 이웃 역(= 열차가 지나온 이전 역) 선택
+                // 반드시 종착역까지의 거리가 현재 역보다 더 먼 이웃 역(= 이전 역)만 선택! (앞쪽 역으로 역주행 금지)
                 val prevStation = neighbors
                     .filter { it !in visited && (distToEnd[it] ?: -1) > currDist }
                     .maxByOrNull { distToEnd[it] ?: -1 }
-                    ?: neighbors.firstOrNull { it !in visited && it != endCanonical }
                     ?: break
 
                 visited.add(prevStation)
                 result.add(prevStation)
                 curr = prevStation
             }
-            if (result.size >= 2) return result
+            return result
         }
 
         return emptyList()
