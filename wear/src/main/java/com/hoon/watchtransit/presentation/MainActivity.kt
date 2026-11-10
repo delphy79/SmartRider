@@ -39,6 +39,7 @@ import androidx.core.content.ContextCompat
 import androidx.wear.compose.material.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
+import com.hoon.watchtransit.data.TransitLocationCache
 import com.hoon.watchtransit.data.TransitWatchStorage
 import com.hoon.watchtransit.model.ArrivalInfo
 import com.hoon.watchtransit.model.TransitTarget
@@ -47,6 +48,9 @@ import com.hoon.watchtransit.network.ArrivalRepository
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 import java.time.LocalTime
 
 
@@ -133,6 +137,7 @@ fun WatchAppScreen(storage: TransitWatchStorage, repository: ArrivalRepository) 
     var isLoading by remember { mutableStateOf(false) }
 
     // 1. 현재 위치 상태 관리 (가장 가까운 곳 자동 스크롤)
+    var isLocating by remember { mutableStateOf(true) }
     var userLocation by remember { mutableStateOf<Location?>(null) }
     val listState = rememberScalingLazyListState()
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { arrivalList.size.coerceAtLeast(1) })
@@ -151,10 +156,22 @@ fun WatchAppScreen(storage: TransitWatchStorage, repository: ArrivalRepository) 
         val hasFine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         val hasCoarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
         if (hasFine || hasCoarse) {
-            requestUserLocation(context) { loc -> userLocation = loc }
+            withTimeoutOrNull(2500L) {
+                suspendCancellableCoroutine { cont ->
+                    requestUserLocation(context) { loc ->
+                        userLocation = loc
+                        TransitLocationCache.saveLocation(context, loc)
+                        if (cont.isActive) cont.resume(Unit) {}
+                    }
+                }
+            }
         } else {
             permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
         }
+        if (userLocation == null) {
+            userLocation = TransitLocationCache.getCachedLocation(context)
+        }
+        isLocating = false
     }
 
     // 위치 획득 시 목록 중 가장 가까운 역으로 자동 스크롤
@@ -194,9 +211,25 @@ fun WatchAppScreen(storage: TransitWatchStorage, repository: ArrivalRepository) 
         }
     }
 
-    LaunchedEffect(closestIndex) {
-        if (closestIndex != null && closestIndex >= 0 && selectedTarget == null) {
-            listState.animateScrollToItem(closestIndex)
+    fun refreshArrival(target: TransitTarget) {
+        coroutineScope.launch {
+            isLoading = true
+            arrivalList = repository.fetchArrivals(target).sortedBy { ArrivalRepository.getEffectiveRemainSeconds(it) }
+            isLoading = false
+            pagerState.scrollToPage(0)
+        }
+    }
+
+    // 앱 실행 후 위치 획득 완료 시 가장 가까운 역 자동 선택 및 도착 정보 조회
+    LaunchedEffect(isLocating, targets) {
+        if (!isLocating && targets.isNotEmpty() && selectedTarget == null) {
+            val targetToSelect = if (closestIndex != null && targets.size > closestIndex) {
+                targets[closestIndex]
+            } else {
+                targets.first()
+            }
+            selectedTarget = targetToSelect
+            refreshArrival(targetToSelect)
         }
     }
 
@@ -207,16 +240,6 @@ fun WatchAppScreen(storage: TransitWatchStorage, repository: ArrivalRepository) 
         }
         onDispose {
             activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        }
-    }
-
-    fun refreshArrival(target: TransitTarget) {
-        coroutineScope.launch {
-            isLoading = true
-            arrivalList = repository.fetchArrivals(target).sortedBy { ArrivalRepository.getEffectiveRemainSeconds(it) }
-            isLoading = false
-            // 가장 빠른 도착 카드(0번)가 화면 중앙에 즉시 오도록 스크롤 초기화
-            pagerState.scrollToPage(0)
         }
     }
 
@@ -251,7 +274,24 @@ fun WatchAppScreen(storage: TransitWatchStorage, repository: ArrivalRepository) 
                 .background(Color.Black),
             contentAlignment = Alignment.Center
         ) {
-            if (selectedTarget == null) {
+            if (isLocating) {
+                // 앱 실행 시 현재 위치 검색 중 화면
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                    modifier = Modifier.fillMaxSize().padding(16.dp)
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(36.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "현재 위치를 검색하고 있습니다.",
+                        textAlign = TextAlign.Center,
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            } else if (selectedTarget == null) {
                 // 1. 역/정류장 목록 화면
                 if (targets.isEmpty()) {
                     Text(
@@ -468,18 +508,17 @@ fun WatchAppScreen(storage: TransitWatchStorage, repository: ArrivalRepository) 
                                         )
                                     }
 
-                                    // 2. 행선지 / 방면
+                                    // 2. 역 / 정류소 이름 (2행으로 이동)
                                     Box(
                                         modifier = Modifier
                                             .weight(if (hasDetail) 1.0f else 1.1f)
                                             .fillMaxWidth(),
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        val destMaxSp = if (current.type == TransitType.BUS) 17f else 20f
-                                        val destFontSize = getFittedFontSize(destLabel, targetMaxSp = destMaxSp, targetMinSp = 13f, maxAvailableWidthDp = 175f)
+                                        val stationFontSize = getFittedFontSize(stationDisplayName, targetMaxSp = 18f, targetMinSp = 13f, maxAvailableWidthDp = 175f)
                                         Text(
-                                            text = destLabel,
-                                            fontSize = destFontSize,
+                                            text = stationDisplayName,
+                                            fontSize = stationFontSize,
                                             fontWeight = FontWeight.Bold,
                                             color = Color.White,
                                             textAlign = TextAlign.Center,
@@ -545,16 +584,18 @@ fun WatchAppScreen(storage: TransitWatchStorage, repository: ArrivalRepository) 
                                         }
                                     }
 
-                                    // 5. 역 / 정류소 이름
+                                    // 5. 행선지 / 방면 (5행으로 이동)
                                     Box(
                                         modifier = Modifier
                                             .weight(if (hasDetail) 0.95f else 1f)
                                             .fillMaxWidth(),
                                         contentAlignment = Alignment.Center
                                     ) {
+                                        val destMaxSp = if (current.type == TransitType.BUS) 16f else 18f
+                                        val destFontSize = getFittedFontSize(destLabel, targetMaxSp = destMaxSp, targetMinSp = 12f, maxAvailableWidthDp = 175f)
                                         Text(
-                                            text = stationDisplayName,
-                                            fontSize = stationFontSize,
+                                            text = destLabel,
+                                            fontSize = destFontSize,
                                             fontWeight = FontWeight.SemiBold,
                                             color = Color(0xFFDDDDDD),
                                             textAlign = TextAlign.Center,

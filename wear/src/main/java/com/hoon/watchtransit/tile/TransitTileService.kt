@@ -100,8 +100,25 @@ class TransitTileService : TileService() {
                 .build()
         }
 
-        // 1. 현재 사용자 위치 획득
+        // 1. 현재 사용자 위치 획득 (앱/타일 실행 시 현재 위치부터 찾기)
         val userLocation = getOrFetchUserLocation()
+
+        if (userLocation == null && TransitLocationCache.getCachedLocation(this) == null) {
+            val searchingLayout = buildSearchingLocationLayout()
+            val timeline = TimelineBuilders.Timeline.Builder()
+                .addTimelineEntry(
+                    TimelineBuilders.TimelineEntry.Builder()
+                        .setLayout(Layout.Builder().setRoot(searchingLayout).build())
+                        .build()
+                )
+                .build()
+
+            return TileBuilders.Tile.Builder()
+                .setResourcesVersion(RESOURCES_VERSION)
+                .setTileTimeline(timeline)
+                .setFreshnessIntervalMillis(3_000L) // 위치 획득 대기 (3초 후 재시도)
+                .build()
+        }
 
         // 2. 현재 위치랑 가까운 곳부터 순서대로 목록 정렬
         val sortedTargets = sortTargetsByProximity(rawTargets, userLocation)
@@ -221,7 +238,7 @@ class TransitTileService : TileService() {
             if (it.remainSeconds > 0) it.remainSeconds else (getTimetableRemainSeconds(it.arrivalTime) ?: ArrivalRepository.getEffectiveRemainSeconds(it))
         }
 
-        val stepSeconds = 5
+        val stepSeconds = 1
         val maxSteps = 60
 
         val steps = if (initialRemain in 1..300) {
@@ -536,6 +553,29 @@ class TransitTileService : TileService() {
             .build()
     }
 
+    private fun buildSearchingLocationLayout(): LayoutElementBuilders.LayoutElement {
+        val text = Text.Builder()
+            .setText("현재 위치를 검색하고 있습니다.")
+            .setMaxLines(2)
+            .setMultilineAlignment(LayoutElementBuilders.TEXT_ALIGN_CENTER)
+            .setFontStyle(
+                LayoutElementBuilders.FontStyle.Builder()
+                    .setSize(sp(14f))
+                    .setWeight(LayoutElementBuilders.FONT_WEIGHT_BOLD)
+                    .setColor(argb(0xFFCBD5E1.toInt()))
+                    .build()
+            )
+            .build()
+
+        return Box.Builder()
+            .setWidth(expand())
+            .setHeight(expand())
+            .setHorizontalAlignment(LayoutElementBuilders.HORIZONTAL_ALIGN_CENTER)
+            .setVerticalAlignment(LayoutElementBuilders.VERTICAL_ALIGN_CENTER)
+            .addContent(text)
+            .build()
+    }
+
     private fun buildEmptyLayout(): LayoutElementBuilders.LayoutElement {
         val clickModifier = ModifiersBuilders.Modifiers.Builder()
             .setClickable(
@@ -597,10 +637,8 @@ class TransitTileService : TileService() {
 
     @SuppressLint("MissingPermission")
     private suspend fun getOrFetchUserLocation(): Location? {
-        val cached = getUserLocation(this@TransitTileService)
-        if (cached != null) return cached
-
-        return withTimeoutOrNull(800L) {
+        // 앱/타일 실행 시 현재 위치부터 찾기 (최신 GPS/Network 위치 1.2초 대기)
+        val freshLocation = withTimeoutOrNull(1200L) {
             suspendCancellableCoroutine { cont ->
                 val lm = getSystemService(Context.LOCATION_SERVICE) as? LocationManager
                 if (lm == null) {
@@ -633,7 +671,8 @@ class TransitTileService : TileService() {
                     runCatching { lm.removeUpdates(listener) }
                 }
             }
-        } ?: getUserLocation(this@TransitTileService)
+        }
+        return freshLocation ?: TransitLocationCache.getCachedLocation(this@TransitTileService) ?: getUserLocation(this@TransitTileService)
     }
 
     @SuppressLint("MissingPermission")
