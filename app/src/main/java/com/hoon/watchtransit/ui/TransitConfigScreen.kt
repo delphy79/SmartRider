@@ -232,36 +232,6 @@ fun TransitConfigScreen(
                     }
                 }
             )
-        },
-        bottomBar = {
-            // 편집 모드일 때 스크린샷과 동일한 하단 오렌지색 '적용하기' 버튼 표출
-            AnimatedVisibility(visible = isEditMode) {
-                Surface(
-                    color = MaterialTheme.colorScheme.surface,
-                    shadowElevation = 8.dp,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Box(modifier = Modifier.padding(16.dp)) {
-                        Button(
-                            onClick = { applyEditMode() },
-                            shape = RoundedCornerShape(14.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFFF37A20), // 주황색 적용하기 버튼
-                                contentColor = Color.White
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(54.dp)
-                        ) {
-                            Text(
-                                "적용하기",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                }
-            }
         }
     ) { innerPadding ->
         Column(
