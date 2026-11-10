@@ -43,6 +43,7 @@ dependencies {
     implementation("androidx.wear.compose:compose-navigation:1.3.1")
     implementation("androidx.activity:activity-compose:1.9.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.2")
+    implementation("androidx.compose.material:material-icons-core")
 
     // Wearable Data Layer API (동기화)
     implementation("com.google.android.gms:play-services-wearable:18.2.0")

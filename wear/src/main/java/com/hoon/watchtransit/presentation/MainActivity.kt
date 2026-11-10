@@ -37,6 +37,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.wear.compose.material.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Menu
 import com.hoon.watchtransit.data.TransitWatchStorage
 import com.hoon.watchtransit.model.ArrivalInfo
 import com.hoon.watchtransit.model.TransitTarget
@@ -344,13 +346,31 @@ fun WatchAppScreen(storage: TransitWatchStorage, repository: ArrivalRepository) 
                         Spacer(modifier = Modifier.height(14.dp))
                         Box(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .border(1.2.dp, Color.White.copy(alpha = 0.85f), RoundedCornerShape(6.dp))
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(Color(0xFF2C303A))
+                                .border(1.dp, Color(0xFF4C5466), RoundedCornerShape(16.dp))
                                 .clickable { selectedTarget = null }
-                                .padding(horizontal = 18.dp, vertical = 5.dp),
+                                .padding(horizontal = 16.dp, vertical = 6.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text("목록", fontSize = 13.sp, color = Color.White, fontWeight = FontWeight.Medium)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Menu,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(modifier = Modifier.width(5.dp))
+                                Text(
+                                    text = "목록",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                            }
                         }
                     }
                 } else {
@@ -530,19 +550,32 @@ fun WatchAppScreen(storage: TransitWatchStorage, repository: ArrivalRepository) 
                                     ) {
                                         Box(
                                             modifier = Modifier
-                                                .clip(RoundedCornerShape(8.dp))
-                                                .border(1.2.dp, Color.White.copy(alpha = 0.85f), RoundedCornerShape(8.dp))
+                                                .clip(RoundedCornerShape(16.dp))
+                                                .background(Color(0xFF2C303A))
+                                                .border(1.dp, Color(0xFF4C5466), RoundedCornerShape(16.dp))
                                                 .clickable { selectedTarget = null }
-                                                .padding(horizontal = 22.dp, vertical = if (hasDetail) 3.dp else 4.dp),
+                                                .padding(horizontal = 16.dp, vertical = if (hasDetail) 4.dp else 6.dp),
                                             contentAlignment = Alignment.Center
                                         ) {
-                                            Text(
-                                                text = "목록",
-                                                fontSize = 13.sp,
-                                                fontWeight = FontWeight.SemiBold,
-                                                color = Color.White,
-                                                style = noPaddingStyle
-                                            )
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.Center
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Menu,
+                                                    contentDescription = null,
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(13.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(5.dp))
+                                                Text(
+                                                    text = "목록",
+                                                    fontSize = 13.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = Color.White,
+                                                    style = noPaddingStyle
+                                                )
+                                            }
                                         }
                                     }
                                 }
