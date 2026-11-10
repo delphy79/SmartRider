@@ -44,6 +44,13 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.2")
     implementation("androidx.compose.material:material-icons-core")
+    // Wear OS Tiles
+    implementation("androidx.wear.tiles:tiles:1.4.0")
+    implementation("androidx.wear.protolayout:protolayout:1.2.0")
+    implementation("androidx.wear.protolayout:protolayout-material:1.2.0")
+    implementation("androidx.wear.protolayout:protolayout-expression:1.2.0")
+    implementation("com.google.guava:guava:33.0.0-android")
+    implementation("androidx.concurrent:concurrent-futures-ktx:1.2.0")
 
     // Wearable Data Layer API (동기화)
     implementation("com.google.android.gms:play-services-wearable:18.2.0")
