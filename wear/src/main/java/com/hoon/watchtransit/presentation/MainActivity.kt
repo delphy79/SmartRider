@@ -220,16 +220,10 @@ fun WatchAppScreen(storage: TransitWatchStorage, repository: ArrivalRepository) 
         }
     }
 
-    // 앱 실행 후 위치 획득 완료 시 가장 가까운 역 자동 선택 및 도착 정보 조회
-    LaunchedEffect(isLocating, targets) {
-        if (!isLocating && targets.isNotEmpty() && selectedTarget == null) {
-            val targetToSelect = if (closestIndex != null && targets.size > closestIndex) {
-                targets[closestIndex]
-            } else {
-                targets.first()
-            }
-            selectedTarget = targetToSelect
-            refreshArrival(targetToSelect)
+    // 앱 실행 후 위치 획득 완료 시 목록이 먼저 표출되고, 가장 가까운 역으로 자동 스크롤
+    LaunchedEffect(isLocating, closestIndex) {
+        if (!isLocating && closestIndex != null && closestIndex >= 0 && selectedTarget == null) {
+            listState.animateScrollToItem(closestIndex)
         }
     }
 
@@ -697,7 +691,7 @@ private fun extractTime(text: String): String? {
 private fun formatLiveArrivalText(arrival: ArrivalInfo, secondsOffset: Int): String {
     val rawMsg = arrival.arrivalTime.trim()
     val isTimetable = rawMsg.contains("시간표") || arrival.statusDetail.contains("시간표") || extractTime(rawMsg) != null
-    val suffix = if (isTimetable) " [시간표]" else ""
+    val suffix = if (isTimetable) " 🕒" else ""
 
     val baseRemain = if (arrival.remainSeconds > 0) {
         arrival.remainSeconds
@@ -734,7 +728,7 @@ private fun formatLiveArrivalText(arrival: ArrivalInfo, secondsOffset: Int): Str
         return "$timeStr$suffix"
     }
 
-    val clean = rawMsg.removeSuffix(" [시간표]").removeSuffix(" 후").trim()
+    val clean = rawMsg.removeSuffix(" [시간표]").removeSuffix("[시간표]").removeSuffix(" 🕒").removeSuffix(" 후").trim()
     return if (clean.isNotEmpty()) "$clean$suffix" else "도착 정보 없음"
 }
 

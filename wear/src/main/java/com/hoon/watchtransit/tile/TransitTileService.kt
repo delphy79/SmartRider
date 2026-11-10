@@ -302,7 +302,7 @@ class TransitTileService : TileService() {
 
     private fun formatRemainSecondsForTile(remainSeconds: Int, originalArrivalTime: String): String {
         val isTimetable = originalArrivalTime.contains("시간표") || Regex("""\d{1,2}:\d{2}""").containsMatchIn(originalArrivalTime)
-        val suffix = if (isTimetable) " [시간표]" else ""
+        val suffix = if (isTimetable) " 🕒" else ""
 
         return when {
             remainSeconds <= 30 -> "곧 도착$suffix"
@@ -314,7 +314,7 @@ class TransitTileService : TileService() {
                 "$tStr$suffix"
             }
             originalArrivalTime.isNotEmpty() -> {
-                val clean = originalArrivalTime.removeSuffix(" [시간표]").removeSuffix(" 후").trim()
+                val clean = originalArrivalTime.removeSuffix(" [시간표]").removeSuffix("[시간표]").removeSuffix(" 🕒").removeSuffix(" 후").trim()
                 if (clean.isNotEmpty()) "$clean$suffix" else "운행 종료"
             }
             else -> "운행 종료"
