@@ -523,7 +523,7 @@ fun WatchAppScreen(storage: TransitWatchStorage, repository: ArrivalRepository) 
                                         )
                                     }
 
-                                    // 3. 도착 시간 (메인 카운트다운/시각)
+                                    // 3. 도착 시간 (메인 카운트다운/시각 - 시간표 아이콘 반으로 축소 및 세로 중앙 정렬)
                                     Box(
                                         modifier = Modifier
                                             .weight(if (hasDetail) 1.6f else 2.0f)
@@ -531,25 +531,44 @@ fun WatchAppScreen(storage: TransitWatchStorage, repository: ArrivalRepository) 
                                             .clickable { refreshArrival(current) },
                                         contentAlignment = Alignment.Center
                                     ) {
+                                        val isTimetable = liveTimeText.endsWith("🕒")
+                                        val pureTimeText = if (isTimetable) liveTimeText.removeSuffix("🕒").trim() else liveTimeText
+
                                         val timeFontSize = getFittedFontSize(
                                             liveTimeText,
                                             targetMaxSp = if (hasDetail) 36f else 44f,
                                             targetMinSp = 20f,
                                             maxAvailableWidthDp = 185f
                                         )
-                                        Text(
-                                            text = liveTimeText,
-                                            fontSize = timeFontSize,
-                                            fontWeight = FontWeight.Black,
-                                            color = if (arrival.isSoon || isSoonByRemaining(arrival, secondsOffset) || liveTimeText.contains("곧"))
-                                                Color(0xFFFF5252)
-                                            else
-                                                Color(0xFF4ADE80),
-                                            textAlign = TextAlign.Center,
-                                            maxLines = 1,
-                                            softWrap = false,
-                                            style = noPaddingStyle
-                                        )
+                                        val timeColor = if (arrival.isSoon || isSoonByRemaining(arrival, secondsOffset) || pureTimeText.contains("곧"))
+                                            Color(0xFFFF5252)
+                                        else
+                                            Color(0xFF4ADE80)
+
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.Center
+                                        ) {
+                                            Text(
+                                                text = pureTimeText,
+                                                fontSize = timeFontSize,
+                                                fontWeight = FontWeight.Black,
+                                                color = timeColor,
+                                                textAlign = TextAlign.Center,
+                                                maxLines = 1,
+                                                softWrap = false,
+                                                style = noPaddingStyle
+                                            )
+                                            if (isTimetable) {
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Text(
+                                                    text = "🕒",
+                                                    fontSize = (timeFontSize.value * 0.5f).sp,
+                                                    textAlign = TextAlign.Center,
+                                                    style = noPaddingStyle
+                                                )
+                                            }
+                                        }
                                     }
 
                                     // 4. 실시간 위치 / 부가 정보 (추가된 독립 라벨 영역 - 역명 라벨과 동일한 높이·크기 확보)
@@ -708,7 +727,7 @@ private fun formatLiveArrivalText(arrival: ArrivalInfo, secondsOffset: Int): Str
             else -> {
                 val m = remaining / 60
                 val s = remaining % 60
-                if (s == 0) "${m}분" else "${m}분 ${s}초"
+                "${m}분 ${s}초"
             }
         }
         return "$timeStr$suffix"
@@ -725,7 +744,7 @@ private fun formatLiveArrivalText(arrival: ArrivalInfo, secondsOffset: Int): Str
     if (minMatch != null) {
         val m = minMatch.groupValues[1].toIntOrNull() ?: 0
         val s = secMatch?.groupValues?.get(1)?.toIntOrNull() ?: 0
-        val timeStr = if (s == 0) "${m}분" else "${m}분 ${s}초"
+        val timeStr = "${m}분 ${s}초"
         return "$timeStr$suffix"
     }
 

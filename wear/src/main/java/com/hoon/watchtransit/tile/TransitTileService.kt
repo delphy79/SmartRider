@@ -51,7 +51,7 @@ import kotlin.coroutines.resume
  */
 class TransitTileService : TileService() {
     private val serviceScope = CoroutineScope(Dispatchers.IO)
-    private val RESOURCES_VERSION = "7"
+    private val RESOURCES_VERSION = "8"
 
     override fun onTileResourcesRequest(requestParams: RequestBuilders.ResourcesRequest): ListenableFuture<ResourceBuilders.Resources> {
         return Futures.immediateFuture(
@@ -292,7 +292,7 @@ class TransitTileService : TileService() {
             remainSeconds >= 60 -> {
                 val m = remainSeconds / 60
                 val s = remainSeconds % 60
-                val tStr = if (s == 0) "${m}분" else "${m}분 ${s}초"
+                val tStr = "${m}분 ${s}초"
                 "$tStr$suffix"
             }
             originalArrivalTime.isNotEmpty() -> {
@@ -388,10 +388,13 @@ class TransitTileService : TileService() {
             )
             .build()
 
-        // 3. 첫 번째 도착 예정 시간 (user_img4.png: 6분 22초 - 38sp 대형 볼드)
+        // 3. 첫 번째 도착 예정 시간 (시간표 아이콘 반으로 축소 및 세로 중앙 정렬)
         val arrivalColor = if (isImminent) argb(0xFFFF5722.toInt()) else argb(0xFFFFFFFF.toInt())
-        val arrival = Text.Builder()
-            .setText(arrivalTime)
+        val isTimetable = arrivalTime.endsWith("🕒")
+        val pureArrivalTime = if (isTimetable) arrivalTime.removeSuffix("🕒").trim() else arrivalTime
+
+        val arrivalText = Text.Builder()
+            .setText(pureArrivalTime)
             .setMaxLines(1)
             .setFontStyle(
                 LayoutElementBuilders.FontStyle.Builder()
@@ -401,6 +404,26 @@ class TransitTileService : TileService() {
                     .build()
             )
             .build()
+
+        val arrivalElement: LayoutElementBuilders.LayoutElement = if (isTimetable) {
+            Row.Builder()
+                .setVerticalAlignment(LayoutElementBuilders.VERTICAL_ALIGN_CENTER)
+                .addContent(arrivalText)
+                .addContent(Spacer.Builder().setWidth(dp(4f)).build())
+                .addContent(
+                    Text.Builder()
+                        .setText("🕒")
+                        .setFontStyle(
+                            LayoutElementBuilders.FontStyle.Builder()
+                                .setSize(sp(18f))
+                                .build()
+                        )
+                        .build()
+                )
+                .build()
+        } else {
+            arrivalText
+        }
 
         // 4. 다음 차량 도착 예정 안내 (user_img4.png: 다음: 16분 22초)
         val nextText = if (secondArrival.isNotEmpty()) "다음: $secondArrival" else " "
@@ -425,7 +448,7 @@ class TransitTileService : TileService() {
             .addContent(Spacer.Builder().setHeight(dp(2f)).build())
             .addContent(dir)
             .addContent(Spacer.Builder().setHeight(dp(4f)).build())
-            .addContent(arrival)
+            .addContent(arrivalElement)
             .addContent(Spacer.Builder().setHeight(dp(2f)).build())
             .addContent(next)
             .addContent(Spacer.Builder().setHeight(dp(6f)).build())
