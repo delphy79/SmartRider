@@ -1,5 +1,9 @@
 package com.hoon.watchtransit.tile
 
+import android.annotation.SuppressLint
+import android.content.Context
+import android.location.Location
+import android.location.LocationManager
 import androidx.concurrent.futures.CallbackToFutureAdapter
 import androidx.wear.protolayout.ActionBuilders
 import androidx.wear.protolayout.ColorBuilders.argb
@@ -68,18 +72,42 @@ class TransitTileService : TileService() {
         val rootElement = if (targets.isEmpty()) {
             buildEmptyLayout()
         } else {
-            // 동일 역이 2개 이상 등록된 경우에만 시간대별(오전/오후) 분기 적용
-            val firstTarget = targets.first()
-            val firstBaseName = firstTarget.name.split("(")[0].removeSuffix("역").trim()
-            val sameStationTargets = targets.filter { t ->
-                t.name.split("(")[0].removeSuffix("역").trim() == firstBaseName
-            }
-
+            // 워치 메인 앱과 100% 동일한 위치 기반 가장 가까운 역 선택 로직:
+            // 1) GPS/네트워크 위치 기반으로 가장 가까운 역 자동 탐색
+            // 2) 가장 가까운 역과 동일한 역(예: 계양역)이 여러 개 등록된 경우에만 시간대별(오전 1번 / 오후 2번) 분기
+            val userLocation = getUserLocation(this@TransitTileService)
             val isBeforeNoon = LocalTime.now().hour < 12
-            val target = if (sameStationTargets.size >= 2) {
-                if (isBeforeNoon) sameStationTargets[0] else sameStationTargets[1]
+
+            val target = if (userLocation != null) {
+                val sortedIndices = targets.indices.sortedBy { idx ->
+                    getDistanceMeters(userLocation, targets[idx]) ?: Float.MAX_VALUE
+                }
+                val bestIdx = sortedIndices.firstOrNull() ?: 0
+                val bestTarget = targets[bestIdx]
+                val bestBaseName = bestTarget.name.split("(")[0].removeSuffix("역").trim()
+
+                val sameStationIndices = targets.indices.filter { idx ->
+                    val baseName = targets[idx].name.split("(")[0].removeSuffix("역").trim()
+                    baseName == bestBaseName
+                }
+
+                if (sameStationIndices.size >= 2) {
+                    if (isBeforeNoon) targets[sameStationIndices[0]] else targets[sameStationIndices[1]]
+                } else {
+                    bestTarget
+                }
             } else {
-                targets.first()
+                // 위치 획득 실패 시 스마트폰 알림 목록 기준 (동일 역 2개 시 오전 1번/오후 2번)
+                val firstTarget = targets.first()
+                val firstBaseName = firstTarget.name.split("(")[0].removeSuffix("역").trim()
+                val sameStationTargets = targets.filter { t ->
+                    t.name.split("(")[0].removeSuffix("역").trim() == firstBaseName
+                }
+                if (sameStationTargets.size >= 2) {
+                    if (isBeforeNoon) sameStationTargets[0] else sameStationTargets[1]
+                } else {
+                    targets.first()
+                }
             }
 
             val repository = ArrivalRepository(this)
@@ -298,5 +326,49 @@ class TransitTileService : TileService() {
             .setVerticalAlignment(LayoutElementBuilders.VERTICAL_ALIGN_CENTER)
             .addContent(column)
             .build()
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun getUserLocation(context: Context): Location? {
+        val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return null
+        val gps = runCatching { lm.getLastKnownLocation(LocationManager.GPS_PROVIDER) }.getOrNull()
+        val net = runCatching { lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER) }.getOrNull()
+        val passive = runCatching { lm.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER) }.getOrNull()
+        return listOfNotNull(gps, net, passive).maxByOrNull { it.time }
+    }
+
+    private fun getStationLocation(target: TransitTarget): Pair<Double, Double> {
+        if (target.lat != 0.0 && target.lon != 0.0) {
+            return Pair(target.lat, target.lon)
+        }
+        val name = target.name.removeSuffix("역").trim()
+        return when {
+            name.contains("계양") -> Pair(37.5715, 126.7360)
+            name.contains("신검단중앙") -> Pair(37.6042, 126.7118)
+            name.contains("완정") -> Pair(37.5929, 126.6730)
+            name.contains("마전") -> Pair(37.6006, 126.6669)
+            name.contains("검단사거리") -> Pair(37.6025, 126.6575)
+            name.contains("서울역") || name == "서울" -> Pair(37.5547, 126.9706)
+            name.contains("선바위") -> Pair(37.4518, 127.0029)
+            name.contains("정부과천청사") -> Pair(37.4265, 126.9899)
+            name.contains("과천") -> Pair(37.4337, 126.9967)
+            name.contains("지식산업단지") -> Pair(37.4116, 126.9890)
+            name.contains("강남") -> Pair(37.4979, 127.0276)
+            name.contains("신도림") -> Pair(37.5088, 126.8913)
+            name.contains("홍대입구") -> Pair(37.5575, 126.9244)
+            name.contains("인천공항") -> Pair(37.4475, 126.4526)
+            name.contains("김포공항") -> Pair(37.5623, 126.8015)
+            name.contains("부평") -> Pair(37.4895, 126.7248)
+            name.contains("송도달빛축제공원") -> Pair(37.3995, 126.6339)
+            else -> Pair(37.5, 127.0)
+        }
+    }
+
+    private fun getDistanceMeters(userLoc: Location?, target: TransitTarget): Float? {
+        if (userLoc == null) return null
+        val (tLat, tLon) = getStationLocation(target)
+        val res = FloatArray(1)
+        Location.distanceBetween(userLoc.latitude, userLoc.longitude, tLat, tLon, res)
+        return res[0]
     }
 }
