@@ -1,15 +1,24 @@
 package com.hoon.watchtransit.ui
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -88,8 +97,22 @@ fun TransitConfigScreen(
     var cityDropdownExpanded by remember { mutableStateOf(false) }
     var cityFilterQuery by remember { mutableStateOf("") }
 
+    // 신규 추가 또는 교체 대상 선택
     var pendingTarget by remember { mutableStateOf<TransitTarget?>(null) }
     var customFilterInput by remember { mutableStateOf("") }
+
+    // 기존 항목 교체용 타겟 (검색을 통해 특정 순번의 대상을 교체할 때 사용)
+    var targetToReplace by remember { mutableStateOf<TransitTarget?>(null) }
+
+    // 항목 직접 수정(이름/방면/코드 등) 다이얼로그 상태
+    var targetBeingEdited by remember { mutableStateOf<TransitTarget?>(null) }
+    var editName by remember { mutableStateOf("") }
+    var editSubCode by remember { mutableStateOf("") }
+    var editDirectionOrRoute by remember { mutableStateOf("") }
+    var editTargetCode by remember { mutableStateOf("") }
+
+    // 편집 모드 토글 (순서 변경 및 세부 제어)
+    var isEditMode by remember { mutableStateOf(false) }
 
     // 신설/임시 정류소 직접 수동 추가 다이얼로그 상태
     var showManualAddDialog by remember { mutableStateOf(false) }
@@ -113,6 +136,15 @@ fun TransitConfigScreen(
             searchResults = list.sortedBy { if (it.type == TransitType.SUBWAY) 0 else 1 }
             isSearching = false
         }
+    }
+
+    // 순서 변경 함수 (위로 이동 / 아래로 이동)
+    fun moveTarget(fromIndex: Int, toIndex: Int) {
+        if (fromIndex !in savedTargets.indices || toIndex !in savedTargets.indices || fromIndex == toIndex) return
+        val mutable = savedTargets.toMutableList()
+        val item = mutable.removeAt(fromIndex)
+        mutable.add(toIndex, item)
+        onSaveTargets(mutable)
     }
 
     Scaffold(
@@ -162,6 +194,47 @@ fun TransitConfigScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
+            // 교체 모드 배너 알림
+            targetToReplace?.let { replacing ->
+                Surface(
+                    color = MaterialTheme.colorScheme.tertiaryContainer,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "교체 대상: [${replacing.name}] (${replacing.subCode})",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer
+                            )
+                            Text(
+                                "새로 검색한 역/정류소로 이 위치에 교체됩니다.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer
+                            )
+                        }
+                        IconButton(
+                            onClick = { targetToReplace = null },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "교체 취소",
+                                tint = MaterialTheme.colorScheme.onTertiaryContainer
+                            )
+                        }
+                    }
+                }
+            }
+
             // 1. 도시 선택 (상단 1줄)
             ExposedDropdownMenuBox(
                 expanded = cityDropdownExpanded,
@@ -241,7 +314,7 @@ fun TransitConfigScreen(
                     onValueChange = { searchKeyword = it },
                     placeholder = {
                         Text(
-                            "지하철역명 / 정류장명(번호)",
+                            if (targetToReplace != null) "교체할 역명/정류장명 검색" else "지하철역명 / 정류장명(번호)",
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -346,8 +419,8 @@ fun TransitConfigScreen(
                                     )
                                 }
                                 Icon(
-                                    Icons.Default.Add,
-                                    contentDescription = "추가",
+                                    if (targetToReplace != null) Icons.Default.Check else Icons.Default.Add,
+                                    contentDescription = if (targetToReplace != null) "교체" else "추가",
                                     tint = MaterialTheme.colorScheme.primary
                                 )
                             }
@@ -391,72 +464,209 @@ fun TransitConfigScreen(
                 color = MaterialTheme.colorScheme.outlineVariant
             )
 
-            // 4. 워치 표시 목록
-            Text(
-                "워치 표시 목록 (${savedTargets.size}개)",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+            // 4. 워치 표시 목록 헤더 및 [1. 편집 버튼]
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                items(savedTargets, key = { it.id }) { item ->
-                    Card(
-                        shape = RoundedCornerShape(14.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(14.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                Text(
+                    "워치 표시 목록 (${savedTargets.size}개)",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+
+                // 1) 편집 버튼 (편집 모드 토글: 순서 변경 / 수정 / 삭제 관리)
+                FilledTonalButton(
+                    onClick = { isEditMode = !isEditMode },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = if (isEditMode) {
+                        ButtonDefaults.filledTonalButtonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary
+                        )
+                    } else {
+                        ButtonDefaults.filledTonalButtonColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                    },
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Icon(
+                        if (isEditMode) Icons.Default.Check else Icons.Default.Edit,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        if (isEditMode) "완료" else "편집",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            if (savedTargets.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "워치에 표시할 역이나 정류소를 검색하여 추가하세요.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    itemsIndexed(savedTargets, key = { _, item -> item.id }) { index, item ->
+                        Card(
+                            shape = RoundedCornerShape(14.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Surface(
-                                        color = if (item.type == TransitType.SUBWAY)
-                                            MaterialTheme.colorScheme.primary
-                                        else
-                                            MaterialTheme.colorScheme.secondary,
-                                        shape = RoundedCornerShape(6.dp),
-                                        modifier = Modifier.padding(end = 8.dp)
-                                    ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // 2) 리스트에 순번 표시 (1, 2, 3...)
+                                Surface(
+                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    shape = CircleShape,
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
                                         Text(
-                                            text = if (item.type == TransitType.SUBWAY) "지하철" else "버스",
-                                            style = MaterialTheme.typography.labelSmall,
+                                            text = "${index + 1}",
+                                            style = MaterialTheme.typography.labelMedium,
                                             fontWeight = FontWeight.Bold,
-                                            color = if (item.type == TransitType.SUBWAY)
-                                                MaterialTheme.colorScheme.onPrimary
-                                            else
-                                                MaterialTheme.colorScheme.onSecondary,
-                                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer
                                         )
                                     }
+                                }
+
+                                Spacer(modifier = Modifier.width(10.dp))
+
+                                // 항목 정보
+                                Column(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable {
+                                            // 카드 클릭 시에도 바로 수정 다이얼로그 호출
+                                            targetBeingEdited = item
+                                            editName = item.name
+                                            editSubCode = item.subCode
+                                            editDirectionOrRoute = item.directionOrRoute
+                                            editTargetCode = item.targetCode
+                                        }
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Surface(
+                                            color = if (item.type == TransitType.SUBWAY)
+                                                MaterialTheme.colorScheme.primary
+                                            else
+                                                MaterialTheme.colorScheme.secondary,
+                                            shape = RoundedCornerShape(6.dp),
+                                            modifier = Modifier.padding(end = 6.dp)
+                                        ) {
+                                            Text(
+                                                text = if (item.type == TransitType.SUBWAY) "지하철" else "버스",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (item.type == TransitType.SUBWAY)
+                                                    MaterialTheme.colorScheme.onPrimary
+                                                else
+                                                    MaterialTheme.colorScheme.onSecondary,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                        Text(
+                                            "${item.name} (${item.subCode})",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(2.dp))
                                     Text(
-                                        "${item.name} (${item.subCode})",
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        fontWeight = FontWeight.SemiBold
+                                        "방면 | ID : ${item.directionOrRoute.ifEmpty { "양방향/전체" }} | ${item.targetCode}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                 }
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    "방면 | ID : ${item.directionOrRoute} | ${item.targetCode}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            IconButton(onClick = {
-                                onSaveTargets(savedTargets.filterNot { it.id == item.id })
-                            }) {
-                                Icon(
-                                    Icons.Default.Delete,
-                                    contentDescription = "삭제",
-                                    tint = MaterialTheme.colorScheme.error
-                                )
+
+                                // 3) 순서 변경 기능 (▲ 위로 / ▼ 아래로) & 4) 변경/수정 & 삭제 버튼
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    // 순서 변경 버튼 (위로)
+                                    IconButton(
+                                        onClick = { moveTarget(index, index - 1) },
+                                        enabled = index > 0,
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.KeyboardArrowUp,
+                                            contentDescription = "위로 이동",
+                                            tint = if (index > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                                        )
+                                    }
+
+                                    // 순서 변경 버튼 (아래로)
+                                    IconButton(
+                                        onClick = { moveTarget(index, index + 1) },
+                                        enabled = index < savedTargets.size - 1,
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.KeyboardArrowDown,
+                                            contentDescription = "아래로 이동",
+                                            tint = if (index < savedTargets.size - 1) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                                        )
+                                    }
+
+                                    // 4) 역이나 정류장을 변경할 수 있는 수정 버튼
+                                    IconButton(
+                                        onClick = {
+                                            targetBeingEdited = item
+                                            editName = item.name
+                                            editSubCode = item.subCode
+                                            editDirectionOrRoute = item.directionOrRoute
+                                            editTargetCode = item.targetCode
+                                        },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Edit,
+                                            contentDescription = "수정/변경",
+                                            tint = MaterialTheme.colorScheme.secondary
+                                        )
+                                    }
+
+                                    // 삭제 버튼
+                                    IconButton(
+                                        onClick = {
+                                            onSaveTargets(savedTargets.filterNot { it.id == item.id })
+                                        },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Delete,
+                                            contentDescription = "삭제",
+                                            tint = MaterialTheme.colorScheme.error
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -465,7 +675,7 @@ fun TransitConfigScreen(
         }
     }
 
-    // 5. 검색 결과 선택 시 세부 필터 설정 다이얼로그
+    // 5. 검색 결과 선택 시 세부 필터 설정 다이얼로그 (신규 추가 또는 기존 항목 교체)
     pendingTarget?.let { target ->
         AlertDialog(
             onDismissRequest = { pendingTarget = null },
@@ -473,7 +683,10 @@ fun TransitConfigScreen(
             containerColor = MaterialTheme.colorScheme.surface,
             title = {
                 Text(
-                    "${target.name} 세부 설정",
+                    if (targetToReplace != null)
+                        "[${targetToReplace?.name}] → [${target.name}] 교체"
+                    else
+                        "${target.name} 세부 설정",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold
                 )
@@ -497,7 +710,8 @@ fun TransitConfigScreen(
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
                             unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant
-                        )
+                        ),
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
             },
@@ -510,7 +724,17 @@ fun TransitConfigScreen(
                             customFilterInput.trim().ifEmpty { "양방향" }
                         }
                         val confirmed = target.copy(directionOrRoute = finalFilter)
-                        onSaveTargets(savedTargets + confirmed)
+
+                        if (targetToReplace != null) {
+                            // 기존 위치를 유지하면서 새 역/정류소로 교체
+                            val updatedList = savedTargets.map { if (it.id == targetToReplace?.id) confirmed else it }
+                            onSaveTargets(updatedList)
+                            targetToReplace = null
+                        } else {
+                            // 목록 끝에 추가
+                            onSaveTargets(savedTargets + confirmed)
+                        }
+
                         pendingTarget = null
                         searchResults = emptyList()
                         searchKeyword = ""
@@ -522,7 +746,10 @@ fun TransitConfigScreen(
                         contentColor = MaterialTheme.colorScheme.onPrimary
                     )
                 ) {
-                    Text("워치 목록에 추가", fontWeight = FontWeight.Bold)
+                    Text(
+                        if (targetToReplace != null) "해당 순번 교체 저장" else "워치 목록에 추가",
+                        fontWeight = FontWeight.Bold
+                    )
                 }
             },
             dismissButton = {
@@ -533,7 +760,113 @@ fun TransitConfigScreen(
         )
     }
 
-    // 6. 신설/임시/마을버스 정류소 직접 수동 추가 다이얼로그
+    // 6. 역이나 정류장을 변경/수정할 수 있는 전용 다이얼로그
+    targetBeingEdited?.let { target ->
+        AlertDialog(
+            onDismissRequest = { targetBeingEdited = null },
+            shape = RoundedCornerShape(20.dp),
+            containerColor = MaterialTheme.colorScheme.surface,
+            title = {
+                Text(
+                    "역 / 정류장 정보 변경",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "역/정류소명 및 방면·노선 필터를 직접 수정하거나, 검색을 통해 다른 역으로 교체할 수 있습니다.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    OutlinedTextField(
+                        value = editName,
+                        onValueChange = { editName = it },
+                        label = { Text(if (target.type == TransitType.SUBWAY) "지하철역명" else "정류소명") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    OutlinedTextField(
+                        value = editSubCode,
+                        onValueChange = { editSubCode = it },
+                        label = { Text(if (target.type == TransitType.SUBWAY) "호선명 (예: 4호선)" else "정류소 번호 / ARS-ID") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    OutlinedTextField(
+                        value = editDirectionOrRoute,
+                        onValueChange = { editDirectionOrRoute = it },
+                        label = { Text(if (target.type == TransitType.SUBWAY) "방면 (예: 당고개행, 양방향)" else "도시코드|버스번호 (예: 23|3)") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    OutlinedTextField(
+                        value = editTargetCode,
+                        onValueChange = { editTargetCode = it },
+                        label = { Text("고유 코드 (stationCd / stationId)") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                    // 다른 역/정류장 검색 교체 버튼
+                    OutlinedButton(
+                        onClick = {
+                            targetToReplace = target
+                            searchKeyword = target.name
+                            targetBeingEdited = null
+                            performSearch()
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("검색을 통해 다른 역/정류소로 교체")
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val updated = target.copy(
+                            name = editName.trim().ifEmpty { target.name },
+                            subCode = editSubCode.trim().ifEmpty { target.subCode },
+                            directionOrRoute = editDirectionOrRoute.trim().ifEmpty { target.directionOrRoute },
+                            targetCode = editTargetCode.trim().ifEmpty { target.targetCode }
+                        )
+                        val updatedList = savedTargets.map { if (it.id == target.id) updated else it }
+                        onSaveTargets(updatedList)
+                        targetBeingEdited = null
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
+                    )
+                ) {
+                    Text("변경 내용 저장", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { targetBeingEdited = null }) {
+                    Text("취소", color = MaterialTheme.colorScheme.outline)
+                }
+            }
+        )
+    }
+
+    // 7. 신설/임시/마을버스 정류소 직접 수동 추가 다이얼로그
     if (showManualAddDialog) {
         AlertDialog(
             onDismissRequest = { showManualAddDialog = false },
@@ -562,7 +895,8 @@ fun TransitConfigScreen(
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
                             unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant
-                        )
+                        ),
+                        modifier = Modifier.fillMaxWidth()
                     )
                     OutlinedTextField(
                         value = manualStopNo,
@@ -573,7 +907,8 @@ fun TransitConfigScreen(
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
                             unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant
-                        )
+                        ),
+                        modifier = Modifier.fillMaxWidth()
                     )
                     OutlinedTextField(
                         value = manualBusFilter,
@@ -584,7 +919,8 @@ fun TransitConfigScreen(
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
                             unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant
-                        )
+                        ),
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
             },
@@ -602,7 +938,13 @@ fun TransitConfigScreen(
                             subCode = code,
                             directionOrRoute = "${selectedCity.code}|$bus"
                         )
-                        onSaveTargets(savedTargets + manualTarget)
+                        if (targetToReplace != null) {
+                            val updatedList = savedTargets.map { if (it.id == targetToReplace?.id) manualTarget else it }
+                            onSaveTargets(updatedList)
+                            targetToReplace = null
+                        } else {
+                            onSaveTargets(savedTargets + manualTarget)
+                        }
                         showManualAddDialog = false
                     },
                     shape = RoundedCornerShape(12.dp),
@@ -611,7 +953,7 @@ fun TransitConfigScreen(
                         contentColor = MaterialTheme.colorScheme.onPrimary
                     )
                 ) {
-                    Text("추가", fontWeight = FontWeight.Bold)
+                    Text(if (targetToReplace != null) "교체 저장" else "추가", fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
