@@ -68,12 +68,18 @@ class TransitTileService : TileService() {
         val rootElement = if (targets.isEmpty()) {
             buildEmptyLayout()
         } else {
-            // 시간대별 분기: 오후 12시 이전 -> 1번째 대상 (출근), 오후 12시 이후 -> 2번째 대상 (퇴근, 2개 이상일 때)
+            // 동일 역이 2개 이상 등록된 경우에만 시간대별(오전/오후) 분기 적용
+            val firstTarget = targets.first()
+            val firstBaseName = firstTarget.name.split("(")[0].removeSuffix("역").trim()
+            val sameStationTargets = targets.filter { t ->
+                t.name.split("(")[0].removeSuffix("역").trim() == firstBaseName
+            }
+
             val isBeforeNoon = LocalTime.now().hour < 12
-            val target = if (isBeforeNoon) {
-                targets.first()
+            val target = if (sameStationTargets.size >= 2) {
+                if (isBeforeNoon) sameStationTargets[0] else sameStationTargets[1]
             } else {
-                if (targets.size >= 2) targets[1] else targets.first()
+                targets.first()
             }
 
             val repository = ArrivalRepository(this)

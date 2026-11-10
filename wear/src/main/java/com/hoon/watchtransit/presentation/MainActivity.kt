@@ -157,20 +157,39 @@ fun WatchAppScreen(storage: TransitWatchStorage, repository: ArrivalRepository) 
         }
     }
 
-    // 위치 획득 시 목록 중 가까운 정류장/역으로 자동 스크롤
-    // 현재 시간이 오후 12시 이전(00:00~11:59)이면 1번째 가까운 곳, 오후 12시 이후(12:00~23:59)이면 2번째 가까운 곳 선택 (동일 역 출퇴근 노선 구분)
+    // 위치 획득 시 목록 중 가장 가까운 역으로 자동 스크롤
+    // 단, 가장 가까운 역과 동일한 역(예: 계양역)이 여러 개 등록된 경우에만 시간대별 분기 적용:
+    // 오전(오후 12시 이전) -> 1번째 등록 역, 오후(오후 12시 이후) -> 2번째 등록 역
     val closestIndex = remember(userLocation, targets) {
         if (userLocation == null || targets.isEmpty()) {
             null
         } else {
+            // 1. 현재 위치에서 가장 가까운 순으로 인덱스 정렬
             val sortedIndices = targets.indices.sortedBy { idx ->
                 getDistanceMeters(userLocation, targets[idx]) ?: Float.MAX_VALUE
             }
+            val bestIdx = sortedIndices.firstOrNull() ?: return@remember null
+            val bestTarget = targets[bestIdx]
+            val bestBaseName = bestTarget.name.split("(")[0].removeSuffix("역").trim()
+
+            // 2. 가장 가까운 역과 동일한 역(역명이 같은 항목)만 원래 등록 순서대로 필터링
+            val sameStationIndices = targets.indices.filter { idx ->
+                val baseName = targets[idx].name.split("(")[0].removeSuffix("역").trim()
+                baseName == bestBaseName
+            }
+
             val isBeforeNoon = LocalTime.now().hour < 12
-            if (isBeforeNoon) {
-                sortedIndices.firstOrNull()
+
+            if (sameStationIndices.size >= 2) {
+                // 같은 역이 2개 이상 등록된 경우: 오전은 1번째, 오후는 2번째 역 선택
+                if (isBeforeNoon) {
+                    sameStationIndices[0]
+                } else {
+                    sameStationIndices[1]
+                }
             } else {
-                if (sortedIndices.size >= 2) sortedIndices[1] else sortedIndices.firstOrNull()
+                // 서로 다른 역인 경우: 물리적으로 가장 가까운 역(bestIdx) 그대로 표시
+                bestIdx
             }
         }
     }
