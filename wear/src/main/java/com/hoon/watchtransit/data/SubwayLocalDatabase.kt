@@ -12,13 +12,14 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * 지하철 노선별 역간 소요시간 및 전체 노선/역 시간표를 관리하는 내부 SQLite 데이터베이스 매니저
  * - assets/database/subway_transit.db 초기 시드 DB를 앱 내부 DB 경로(databases/subway_transit.db)로 복사하여 사용
- * - 현재 노선(서울 1~8호선, 인천 1·2호선, 공항철도)뿐 아니라 차후 추가될 모든 지하철 노선/역 시간표를 통합 수용
+ * - 서울 1~8호선, 인천 1·2호선, 공항철도, 코레일 1호선(경부·장항·경인·경원·광명셔틀), 4호선(진접·과천·안산선),
+ *   수인분당선, 경의중앙선, 경춘선(ITX-청춘 포함), 서해선 및 향후 추가될 모든 노선/역 시간표를 통합 수용
  */
 object SubwayLocalDatabase {
     private const val TAG = "SubwayLocalDB"
     private const val DB_NAME = "subway_transit.db"
     private const val ASSET_DB_PATH = "database/$DB_NAME"
-    private const val DB_VERSION = 1
+    private const val DB_VERSION = 2
 
     data class TravelTimeEntity(
         val seq: Int,
@@ -27,6 +28,13 @@ object SubwayLocalDatabase {
         val travelSeconds: Int,
         val distanceKm: Double = 0.0,
         val totalDistanceKm: Double = 0.0
+    )
+
+    data class GraphEdgeEntity(
+        val lineCode: String,
+        val fromStation: String,
+        val toStation: String,
+        val travelSeconds: Int
     )
 
     data class TrainStopEntity(
@@ -113,7 +121,7 @@ object SubwayLocalDatabase {
                     }
                 }
                 scheduleCache.clear()
-                Log.d(TAG, "Copied seed database from assets to ${dbFile.absolutePath}")
+                Log.d(TAG, "Copied seed database (v$DB_VERSION) from assets to ${dbFile.absolutePath}")
             }.onFailure { e ->
                 Log.e(TAG, "Failed to copy seed database from assets: ${e.message}", e)
             }
@@ -134,6 +142,18 @@ object SubwayLocalDatabase {
             """.trimIndent()
         )
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_travel_times_line ON subway_travel_times(line_code, seq)")
+
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS subway_graph_edges (
+                line_code TEXT NOT NULL,
+                from_station TEXT NOT NULL,
+                to_station TEXT NOT NULL,
+                travel_seconds INTEGER NOT NULL,
+                PRIMARY KEY (line_code, from_station, to_station)
+            )
+            """.trimIndent()
+        )
 
         db.execSQL(
             """
@@ -199,7 +219,7 @@ object SubwayLocalDatabase {
     }
 
     /**
-     * 역간 소요시간 전체 데이터 조회
+     * 역간 소요시간 순차 데이터 조회
      */
     fun getTravelTimeRows(context: Context): List<TravelTimeEntity> = runCatching {
         val db = getDatabase(context)
@@ -224,6 +244,34 @@ object SubwayLocalDatabase {
         result
     }.getOrElse { e ->
         Log.e(TAG, "Failed to query subway_travel_times: ${e.message}", e)
+        emptyList()
+    }
+
+    /**
+     * 코레일·광역전철(1호선 전 구간, 4호선 진접·과천·안산선, 수인분당선, 경의중앙선, 경춘선, 서해선 등)의
+     * 역간 인접 그래프 간선(edge) 및 소요시간(초) 목록 조회
+     */
+    fun getGraphEdges(context: Context): List<GraphEdgeEntity> = runCatching {
+        val db = getDatabase(context)
+        val result = mutableListOf<GraphEdgeEntity>()
+        db.rawQuery(
+            "SELECT line_code, from_station, to_station, travel_seconds FROM subway_graph_edges",
+            null
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                result.add(
+                    GraphEdgeEntity(
+                        lineCode = cursor.getString(0),
+                        fromStation = cursor.getString(1),
+                        toStation = cursor.getString(2),
+                        travelSeconds = cursor.getInt(3)
+                    )
+                )
+            }
+        }
+        result
+    }.getOrElse { e ->
+        Log.e(TAG, "Failed to query subway_graph_edges: ${e.message}", e)
         emptyList()
     }
 

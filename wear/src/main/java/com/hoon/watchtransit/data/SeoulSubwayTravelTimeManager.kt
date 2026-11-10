@@ -6,8 +6,9 @@ import java.util.PriorityQueue
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * 서울교통공사, 인천교통공사(1·2호선·7호선 연장), 공항철도 공식 역간거리 및 소요시간 데이터를
- * 내부 SQLite DB(SubwayLocalDatabase)에서 로드하여 역 간 실시간 소요시간(초) 및 남은 역 수를 정밀 계산하는 매니저
+ * 서울교통공사, 인천교통공사(1·2호선·7호선 연장), 공항철도 및 코레일 광역전철(1호선 전 구간, 4호선 진접·과천·안산선,
+ * 수인분당선, 경의중앙선, 경춘선, 서해선)의 역간 소요시간 데이터를 내부 SQLite DB(SubwayLocalDatabase)에서 로드하여
+ * 역 간 실시간 소요시간(초) 및 남은 역 수를 정밀 계산하는 매니저
  */
 object SeoulSubwayTravelTimeManager {
     private const val TAG = "SeoulTravelTime"
@@ -26,10 +27,6 @@ object SeoulSubwayTravelTimeManager {
         val station: String,
         val travelSec: Int
     )
-
-    private data class Edge(val to: String, val weight: Int) : Comparable<Edge> {
-        override fun compareTo(other: Edge): Int = weight.compareTo(other.weight)
-    }
 
     /**
      * 내부 SQLite DB 데이터를 로드하여 호선별 그래프 및 역명 별칭 매핑 생성
@@ -51,7 +48,16 @@ object SeoulSubwayTravelTimeManager {
     private fun loadDataFromDb(context: Context) {
         val rowsByLine = mutableMapOf<String, MutableList<StationRow>>()
         val aliasesByLine = mutableMapOf<String, MutableMap<String, String>>()
+        val graphsByLine = mutableMapOf<String, MutableMap<String, MutableMap<String, Int>>>()
 
+        fun addEdge(lineNum: String, u: String, v: String, w: Int) {
+            if (u == v || w <= 0) return
+            val adj = graphsByLine.getOrPut(lineNum) { mutableMapOf() }
+            adj.getOrPut(u) { mutableMapOf() }[v] = minOf(adj.getOrPut(u) { mutableMapOf() }[v] ?: Int.MAX_VALUE, w)
+            adj.getOrPut(v) { mutableMapOf() }[u] = minOf(adj.getOrPut(v) { mutableMapOf() }[u] ?: Int.MAX_VALUE, w)
+        }
+
+        // 1. 기본 순차 역간 소요시간 테이블(subway_travel_times) 로드
         val dbRows = SubwayLocalDatabase.getTravelTimeRows(context)
         for (entity in dbRows) {
             val lineNum = entity.lineCode.trim()
@@ -63,84 +69,94 @@ object SeoulSubwayTravelTimeManager {
             registerStationAlias(lineAliasMap, stn)
         }
 
-        // 호선별 특수 역명 별칭 추가 등록
-        registerSpecialAliases(aliasesByLine)
-
-        // 호선별 그래프 구축
         for ((lineNum, rows) in rowsByLine) {
-            val adj = mutableMapOf<String, MutableMap<String, Int>>()
-
-            fun addEdge(u: String, v: String, w: Int) {
-                adj.getOrPut(u) { mutableMapOf() }[v] = minOf(adj.getOrPut(u) { mutableMapOf() }[v] ?: Int.MAX_VALUE, w)
-                adj.getOrPut(v) { mutableMapOf() }[u] = minOf(adj.getOrPut(v) { mutableMapOf() }[u] ?: Int.MAX_VALUE, w)
-            }
-
             when (lineNum) {
                 "1" -> {
-                    // seq 1~10 (서울역 ~ 청량리)
                     for (i in 0 until rows.size - 1) {
-                        addEdge(rows[i].station, rows[i + 1].station, rows[i + 1].travelSec)
+                        addEdge(lineNum, rows[i].station, rows[i + 1].station, rows[i + 1].travelSec)
                     }
                 }
                 "2" -> {
                     // 본선 순환선: seq 11~53, 그리고 53(충정로) -> 54(시청)
                     val mainRows = rows.filter { it.seq in 11..54 }
                     for (i in 0 until mainRows.size - 1) {
-                        addEdge(mainRows[i].station, mainRows[i + 1].station, mainRows[i + 1].travelSec)
+                        addEdge(lineNum, mainRows[i].station, mainRows[i + 1].station, mainRows[i + 1].travelSec)
                     }
 
                     // 성수지선: 성수 <-> 용답(seq 55, 180초), seq 55~58 (신설동)
-                    addEdge("성수", "용답", 180)
+                    addEdge(lineNum, "성수", "용답", 180)
                     val seongsuRows = rows.filter { it.seq in 55..58 }
                     for (i in 0 until seongsuRows.size - 1) {
-                        addEdge(seongsuRows[i].station, seongsuRows[i + 1].station, seongsuRows[i + 1].travelSec)
+                        addEdge(lineNum, seongsuRows[i].station, seongsuRows[i + 1].station, seongsuRows[i + 1].travelSec)
                     }
 
                     // 신정지선: 신도림 <-> 도림천(seq 59, 90초), seq 59~62 (까치산)
-                    addEdge("신도림", "도림천", 90)
+                    addEdge(lineNum, "신도림", "도림천", 90)
                     val sinjeongRows = rows.filter { it.seq in 59..62 }
                     for (i in 0 until sinjeongRows.size - 1) {
-                        addEdge(sinjeongRows[i].station, sinjeongRows[i + 1].station, sinjeongRows[i + 1].travelSec)
+                        addEdge(lineNum, sinjeongRows[i].station, sinjeongRows[i + 1].station, sinjeongRows[i + 1].travelSec)
                     }
                 }
                 "5" -> {
                     // 본선: seq 123(방화) ~ 171(하남검단산)
                     val mainRows = rows.filter { it.seq in 123..171 }
                     for (i in 0 until mainRows.size - 1) {
-                        addEdge(mainRows[i].station, mainRows[i + 1].station, mainRows[i + 1].travelSec)
+                        addEdge(lineNum, mainRows[i].station, mainRows[i + 1].station, mainRows[i + 1].travelSec)
                     }
 
                     // 마천지선: 강동 <-> 둔촌동(seq 172, 110초), seq 172~178 (마천)
-                    addEdge("강동", "둔촌동", 110)
+                    addEdge(lineNum, "강동", "둔촌동", 110)
                     val macheonRows = rows.filter { it.seq in 172..178 }
                     for (i in 0 until macheonRows.size - 1) {
-                        addEdge(macheonRows[i].station, macheonRows[i + 1].station, macheonRows[i + 1].travelSec)
+                        addEdge(lineNum, macheonRows[i].station, macheonRows[i + 1].station, macheonRows[i + 1].travelSec)
                     }
                 }
                 "6" -> {
                     // 응암루프: seq 179~185 (응암 -> 역촌 -> 불광 -> 독바위 -> 연신내 -> 구산 -> 응암)
                     val loopRows = rows.filter { it.seq in 179..185 }
                     for (i in 0 until loopRows.size - 1) {
-                        addEdge(loopRows[i].station, loopRows[i + 1].station, loopRows[i + 1].travelSec)
+                        addEdge(lineNum, loopRows[i].station, loopRows[i + 1].station, loopRows[i + 1].travelSec)
                     }
 
                     // 본선: seq 185(응암) ~ 218(신내역)
                     val mainRows = rows.filter { it.seq in 185..218 }
                     for (i in 0 until mainRows.size - 1) {
-                        addEdge(mainRows[i].station, mainRows[i + 1].station, mainRows[i + 1].travelSec)
+                        addEdge(lineNum, mainRows[i].station, mainRows[i + 1].station, mainRows[i + 1].travelSec)
                     }
                 }
                 else -> {
-                    // 3, 4, 7, 8호선 및 인천1호선(I1), 인천2호선(I2), 공항철도(AREX) 및 향후 추가 노선 순차 연결
+                    // 3, 4, 7, 8호선 및 인천1호선(I1), 인천2호선(I2), 공항철도(AREX) 등 순차 연결
                     for (i in 0 until rows.size - 1) {
-                        addEdge(rows[i].station, rows[i + 1].station, rows[i + 1].travelSec)
+                        addEdge(lineNum, rows[i].station, rows[i + 1].station, rows[i + 1].travelSec)
                     }
                 }
             }
-
-            lineGraphs[lineNum] = adj
         }
 
+        // 2. 코레일·광역전철 역간 그래프 간선 테이블(subway_graph_edges) 로드 및 병합
+        // (1호선 전 구간, 4호선 진접·과천·안산선, 수인분당선, 경의중앙선, 경춘선, 서해선 등)
+        val graphEdges = SubwayLocalDatabase.getGraphEdges(context)
+        for (edge in graphEdges) {
+            val lineNum = edge.lineCode.trim()
+            val u = edge.fromStation.trim()
+            val v = edge.toStation.trim()
+            val lineAliasMap = aliasesByLine.getOrPut(lineNum) { mutableMapOf() }
+            registerStationAlias(lineAliasMap, u)
+            registerStationAlias(lineAliasMap, v)
+
+            val adj = graphsByLine.getOrPut(lineNum) { mutableMapOf() }
+            // 기존 서울교통공사 공식 구간 값이 있으면 유지하고, 없는 구간(과천·안산·진접선, 경부·경인·경원선 등)을 채움
+            if (adj[u]?.containsKey(v) != true) {
+                addEdge(lineNum, u, v, edge.travelSeconds)
+            }
+        }
+
+        // 호선별 특수 역명 별칭 추가 등록
+        registerSpecialAliases(aliasesByLine)
+
+        for ((lineNum, adj) in graphsByLine) {
+            lineGraphs[lineNum] = adj
+        }
         for ((lineNum, map) in aliasesByLine) {
             stationAliases[lineNum] = map
         }
@@ -157,8 +173,35 @@ object SeoulSubwayTravelTimeManager {
     }
 
     private fun registerSpecialAliases(aliasesByLine: MutableMap<String, MutableMap<String, String>>) {
-        // 4호선 총신대입구 / 이수
+        // 1호선 특수 별칭
+        aliasesByLine["1"]?.let { map ->
+            map["서울"] = "서울역"
+            map["서울역"] = "서울역"
+            map["지하서울"] = "서울역"
+            map["지하서"] = "서울역"
+            map["1지청"] = "청량리"
+            map["1동대"] = "동대문"
+            map["1종로"] = "종로3가"
+            map["종로5"] = "종로5가"
+            map["가산디"] = "가산디지털단지"
+            map["금천구"] = "금천구청"
+            map["성균관"] = "성균관대"
+            map["쌍용(나사렛대)"] = "쌍용"
+            map["쌍용나"] = "쌍용"
+            map["온양온"] = "온양온천"
+            map["평지제"] = "평택지제"
+            map["지제"] = "평택지제"
+            map["동두중"] = "동두천중앙"
+            map["백마고"] = "백마고지"
+        }
+        // 4호선 특수 별칭 (진접선, 과천선, 안산선 포함)
         aliasesByLine["4"]?.let { map ->
+            map["서울"] = "서울역"
+            map["서울역"] = "서울역"
+            map["4서울"] = "서울역"
+            map["불암산"] = "당고개"
+            map["불암산역"] = "당고개"
+            map["당고개"] = "당고개"
             map["이수"] = "총신대입구"
             map["이수역"] = "총신대입구"
             map["총신대"] = "총신대입구"
@@ -166,6 +209,17 @@ object SeoulSubwayTravelTimeManager {
             map["총신대입구역"] = "총신대입구"
             map["동작(현충원)"] = "동작"
             map["미아사거리"] = "미아사거리"
+            map["미아4"] = "미아사거리"
+            map["과천청"] = "정부과천청사"
+            map["과천청사"] = "정부과천청사"
+            map["경마공"] = "경마공원"
+            map["평촌동"] = "평촌"
+            map["신길온"] = "신길온천"
+            map["능길"] = "신길온천"
+            map["능길역"] = "신길온천"
+            map["한성대"] = "한성대입구"
+            map["성신여"] = "성신여대입구"
+            map["숙대입"] = "숙대입구"
         }
         // 2호선 / 4호선 / 5호선 동대문역사문화공원
         listOf("2", "4", "5").forEach { line ->
@@ -175,12 +229,63 @@ object SeoulSubwayTravelTimeManager {
                 map["동대문역사문화"] = "동대문역사문화공원"
                 map["동역사"] = "동대문역사문화공원"
                 map["DDP"] = "동대문역사문화공원"
+                map["4동운"] = "동대문역사문화공원"
             }
         }
         // 6호선 신내 / 신내역
         aliasesByLine["6"]?.let { map ->
             map["신내"] = "신내역"
             map["신내역"] = "신내역"
+        }
+        // 수인분당선 특수 별칭
+        aliasesByLine["SUIN"]?.let { map ->
+            map["신인천"] = "인천"
+            map["신수원"] = "수원"
+            map["수원시"] = "수원시청"
+            map["매탄권"] = "매탄권선"
+            map["로데오"] = "압구정로데오"
+            map["강남구"] = "강남구청"
+            map["대모산"] = "대모산입구"
+            map["구룡역"] = "구룡"
+            map["남동인"] = "남동인더스파크"
+            map["인천논"] = "인천논현"
+            map["소래포"] = "소래포구"
+            map["신길온"] = "신길온천"
+            map["능길"] = "신길온천"
+        }
+        // 경의중앙선 특수 별칭
+        aliasesByLine["GYEONGUI"]?.let { map ->
+            map["서울역"] = "서울"
+            map["서울"] = "서울"
+            map["디엠시"] = "디지털미디어시티"
+            map["DMC"] = "디지털미디어시티"
+            map["디지털미디어시티"] = "디지털미디어시티"
+            map["홍대입"] = "홍대입구"
+            map["효창공"] = "효창공원앞"
+            map["효창공원"] = "효창공원앞"
+            map["항공대"] = "한국항공대"
+            map["화전"] = "한국항공대"
+            map["1양원"] = "양원"
+            map["1양정"] = "양정"
+        }
+        // 경춘선 특수 별칭
+        aliasesByLine["GYEONGCHUN"]?.let { map ->
+            map["평내호"] = "평내호평"
+            map["평내호평"] = "평내호평"
+            map["신내역"] = "신내"
+            map["신내"] = "신내"
+        }
+        // 서해선 특수 별칭
+        aliasesByLine["SEOHAE"]?.let { map ->
+            map["신김포"] = "김포공항"
+            map["부천종"] = "부천종합운동장"
+            map["신소사"] = "소사"
+            map["시흥대"] = "시흥대야"
+            map["신신천"] = "신천"
+            map["신신현"] = "신현"
+            map["시흥청"] = "시흥시청"
+            map["시흥능"] = "시흥능곡"
+            map["신초지"] = "초지"
         }
         // 인천2호선 특수 역명 별칭 (인천교통공사 표기 차이 대응)
         aliasesByLine["I2"]?.let { map ->
@@ -214,22 +319,22 @@ object SeoulSubwayTravelTimeManager {
             clean == "1065" || clean.contains("공항철도") || clean.contains("공항") || clean.equals("AREX", ignoreCase = true) -> "AREX"
             clean == "1069" || clean.contains("인천1") || clean == "I1" -> "I1"
             clean == "1070" || clean.contains("인천2") || clean == "I2" -> "I2"
-            clean == "1001" || (clean.contains("1호선") && !clean.contains("인천")) -> "1"
+            clean == "1001" || (clean.contains("1호선") && !clean.contains("인천")) || clean.contains("경부") || clean.contains("경인") || clean.contains("경원") || clean.contains("장항") -> "1"
             clean == "1002" || (clean.contains("2호선") && !clean.contains("인천")) -> "2"
             clean == "1003" || clean.contains("3호선") -> "3"
-            clean == "1004" || clean.contains("4호선") -> "4"
+            clean == "1004" || clean.contains("4호선") || clean.contains("안산") || clean.contains("과천") || clean.contains("진접") -> "4"
             clean == "1005" || clean.contains("5호선") -> "5"
             clean == "1006" || clean.contains("6호선") -> "6"
             clean == "1007" || clean.contains("7호선") -> "7"
             clean == "1008" || clean.contains("8호선") -> "8"
             clean == "1009" || clean.contains("9호선") -> "9"
-            clean == "1063" || clean.contains("경의중앙") -> "GYEONGUI"
-            clean == "1067" || clean.contains("경춘") -> "GYEONGCHUN"
-            clean == "1075" || clean.contains("수인분당") -> "SUIN"
-            clean == "1077" || clean.contains("신분당") -> "SHINBUNDANG"
-            clean == "1081" || clean.contains("신림") -> "SILLIM"
-            clean == "1092" || clean.contains("우이신설") -> "UI"
-            clean == "1093" || clean.contains("서해") -> "SEOHAE"
+            clean == "1063" || clean.contains("경의") || clean.contains("중앙") || clean.equals("GYEONGUI", ignoreCase = true) -> "GYEONGUI"
+            clean == "1067" || clean.contains("경춘") || clean.contains("청춘") || clean.equals("GYEONGCHUN", ignoreCase = true) -> "GYEONGCHUN"
+            clean == "1075" || clean.contains("수인") || (clean.contains("분당") && !clean.contains("신분당")) || clean.equals("SUIN", ignoreCase = true) -> "SUIN"
+            clean == "1077" || clean.contains("신분당") || clean.equals("SHINBUNDANG", ignoreCase = true) -> "SHINBUNDANG"
+            clean == "1081" || clean.contains("신림") || clean.equals("SILLIM", ignoreCase = true) -> "SILLIM"
+            clean == "1092" || clean.contains("우이신설") || clean.equals("UI", ignoreCase = true) -> "UI"
+            clean == "1093" || clean.contains("서해") || clean.equals("SEOHAE", ignoreCase = true) -> "SEOHAE"
             clean.all { it.isDigit() } && clean.toIntOrNull() in 1..9 -> clean
             else -> null
         }

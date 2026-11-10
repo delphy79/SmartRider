@@ -8,12 +8,14 @@ import java.time.LocalDate
 import java.time.LocalTime
 
 /**
- * 인천도시철도(1호선, 2호선) 및 향후 내부 DB(timetable_trains/timetable_stops)에 추가될 지하철 노선의
+ * 인천도시철도(1호선, 2호선) 및 내부 DB(timetable_trains/timetable_stops)에 수록된 지하철 노선
+ * (1호선, 4호선 안산·과천·진접선, 수인분당선, 경의중앙선, 경춘선/ITX-청춘, 서해선 등)의
  * 공식 열차운행시각표를 내부 SQLite DB(SubwayLocalDatabase)에서 조회하여 도착 예정 시각 계산
  */
 object IncheonTimetableManager {
 
     private val STATION_ALIASES = mapOf(
+        // 인천 1·2호선
         "석바위" to "석바위",
         "석바위시장" to "석바위",
         "주안국가" to "주안국가",
@@ -23,7 +25,79 @@ object IncheonTimetableManager {
         "가정중앙" to "가정중앙",
         "가정중앙시장" to "가정중앙",
         "아시아드" to "아시아드",
-        "아시아드경기장" to "아시아드"
+        "아시아드경기장" to "아시아드",
+
+        // 1호선 / 4호선 / 광역전철 공통 별칭
+        "서울역" to "서울",
+        "지하서울" to "서울",
+        "지하서" to "서울",
+        "4서울" to "서울",
+        "불암산" to "당고개",
+        "이수" to "총신대입구",
+        "총신대입구(이수)" to "총신대입구",
+        "총신대" to "총신대입구",
+        "동작(현충원)" to "동작",
+        "과천청" to "정부과천청사",
+        "과천청사" to "정부과천청사",
+        "경마공" to "경마공원",
+        "평촌동" to "평촌",
+        "신길온" to "신길온천",
+        "능길" to "신길온천",
+        "한성대" to "한성대입구",
+        "성신여" to "성신여대입구",
+        "숙대입" to "숙대입구",
+        "미아4" to "미아사거리",
+        "4동운" to "동대문역사문화공원",
+        "동역사" to "동대문역사문화공원",
+        "4동대" to "동대문",
+        "1동대" to "동대문",
+        "1종로" to "종로3가",
+        "종로5" to "종로5가",
+        "1지청" to "청량리",
+        "가산디" to "가산디지털단지",
+        "금천구" to "금천구청",
+        "성균관" to "성균관대",
+        "쌍용(나사렛대)" to "쌍용",
+        "쌍용나" to "쌍용",
+        "온양온" to "온양온천",
+        "평지제" to "평택지제",
+        "지제" to "평택지제",
+        "동두중" to "동두천중앙",
+        "백마고" to "백마고지",
+
+        // 수인분당선
+        "신인천" to "인천",
+        "신수원" to "수원",
+        "수원시" to "수원시청",
+        "매탄권" to "매탄권선",
+        "로데오" to "압구정로데오",
+        "강남구" to "강남구청",
+        "대모산" to "대모산입구",
+        "구룡역" to "구룡",
+        "남동인" to "남동인더스파크",
+        "인천논" to "인천논현",
+        "소래포" to "소래포구",
+
+        // 경의중앙선 / 경춘선 / 서해선
+        "디엠시" to "디지털미디어시티",
+        "DMC" to "디지털미디어시티",
+        "홍대입" to "홍대입구",
+        "효창공" to "효창공원앞",
+        "효창공원" to "효창공원앞",
+        "항공대" to "한국항공대",
+        "화전" to "한국항공대",
+        "1양원" to "양원",
+        "1양정" to "양정",
+        "평내호" to "평내호평",
+        "신김포" to "김포공항",
+        "부천종" to "부천종합운동장",
+        "신소사" to "소사",
+        "시흥대" to "시흥대야",
+        "신신천" to "신천",
+        "신신현" to "신현",
+        "시흥청" to "시흥시청",
+        "시흥능" to "시흥능곡",
+        "신초지" to "초지"
     )
 
     fun isLine2(target: TransitTarget): Boolean {
@@ -41,8 +115,10 @@ object IncheonTimetableManager {
     }
 
     private fun canonicalStationName(rawName: String): String {
-        val clean = rawName.removeSuffix("역").trim()
-        return STATION_ALIASES[clean] ?: clean
+        val clean = rawName.replace(Regex("""\(.*?\)"""), "").removeSuffix("역").trim()
+        return STATION_ALIASES[rawName.trim()]
+            ?: STATION_ALIASES[clean]
+            ?: clean
     }
 
     /**
@@ -57,7 +133,7 @@ object IncheonTimetableManager {
 
     /**
      * 내부 DB(timetable_trains / timetable_stops)에 수록된 임의의 노선(lineCode)에 대해
-     * 특정 역의 다음 도착 열차 목록 (시간순 상위 2개) 반환 (차후 추가될 타 지하철 노선 공용)
+     * 특정 역의 다음 도착 열차 목록 (시간순 상위 2개) 반환
      */
     fun getArrivalsByLineCode(
         context: Context,
@@ -167,13 +243,20 @@ object IncheonTimetableManager {
 
             if (tSec < nowSec) continue // 이미 지난 열차
 
-            val expressTag = if (row.isExpress) " (급행)" else ""
+            val expressTag = when {
+                row.lineCode == "GYEONGCHUN" && row.trainNo.startsWith("S2") -> " (ITX-청춘)"
+                row.isExpress -> " (급행)"
+                else -> ""
+            }
             val destTitle = if (row.endStation.isNotEmpty()) "${row.endStation}행$expressTag" else "${directionName}방면$expressTag"
 
             // 필터링 적용
             if (filter.isNotEmpty() && filter != "양방향") {
+                val filterCanon = canonicalStationName(filter.removeSuffix("행").removeSuffix("방면").trim())
                 val matchesDir = filter.contains(directionName)
-                val matchesDest = destTitle.contains(filter) || filter.contains(row.endStation)
+                val matchesDest = destTitle.contains(filter) ||
+                        filter.contains(row.endStation) ||
+                        (filterCanon.isNotEmpty() && canonicalStationName(row.endStation) == filterCanon)
                 if (!matchesDir && !matchesDest) {
                     continue
                 }
@@ -277,7 +360,11 @@ object IncheonTimetableManager {
             val tSec = parseTimeToDaySeconds(tStr) ?: continue
             if (tSec < earliestTimeSec) {
                 earliestTimeSec = tSec
-                val expressTag = if (row.isExpress) " (급행)" else ""
+                val expressTag = when {
+                    row.lineCode == "GYEONGCHUN" && row.trainNo.startsWith("S2") -> " (ITX-청춘)"
+                    row.isExpress -> " (급행)"
+                    else -> ""
+                }
                 val destTitle = if (row.endStation.isNotEmpty()) "${row.endStation}행$expressTag" else "${dir}방면$expressTag"
                 val formattedTime = formatToHhMmSs(tStr)
                 earliestInfo = ArrivalInfo(
