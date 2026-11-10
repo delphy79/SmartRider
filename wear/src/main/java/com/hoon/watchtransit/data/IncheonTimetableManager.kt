@@ -9,7 +9,7 @@ import java.time.LocalTime
 
 /**
  * 인천도시철도(1호선, 2호선) 및 내부 DB(timetable_trains/timetable_stops)에 수록된 지하철 노선
- * (1호선, 4호선 안산·과천·진접선, 수인분당선, 경의중앙선, 경춘선/ITX-청춘, 서해선 등)의
+ * (서울 1~9호선 전 구간, 수인분당선, 경의중앙선, 경춘선/ITX-청춘, 서해선 등)의
  * 공식 열차운행시각표를 내부 SQLite DB(SubwayLocalDatabase)에서 조회하여 도착 예정 시각 계산
  */
 object IncheonTimetableManager {
@@ -27,12 +27,13 @@ object IncheonTimetableManager {
         "아시아드" to "아시아드",
         "아시아드경기장" to "아시아드",
 
-        // 1호선 / 4호선 / 광역전철 공통 별칭
+        // 1~9호선 / 광역전철 공통 별칭
         "서울역" to "서울",
         "지하서울" to "서울",
         "지하서" to "서울",
         "4서울" to "서울",
         "불암산" to "당고개",
+        "별가람" to "별내별가람",
         "이수" to "총신대입구",
         "총신대입구(이수)" to "총신대입구",
         "총신대" to "총신대입구",
@@ -114,8 +115,12 @@ object IncheonTimetableManager {
         return line2Stations.contains(stationName)
     }
 
-    private fun canonicalStationName(rawName: String): String {
+    private fun canonicalStationName(rawName: String, lineCode: String = ""): String {
         val clean = rawName.replace(Regex("""\(.*?\)"""), "").removeSuffix("역").trim()
+        // 7호선 '이수'는 '이수' 그대로 유지 (4호선만 '총신대입구'로 매핑)
+        if (lineCode == "7" && clean == "이수") {
+            return "이수"
+        }
         return STATION_ALIASES[rawName.trim()]
             ?: STATION_ALIASES[clean]
             ?: clean
@@ -141,7 +146,7 @@ object IncheonTimetableManager {
         lineName: String,
         target: TransitTarget
     ): List<ArrivalInfo> {
-        val targetStation = canonicalStationName(target.name)
+        val targetStation = canonicalStationName(target.name, lineCode)
         val filter = target.directionOrRoute.trim()
 
         val now = LocalTime.now()
@@ -162,7 +167,7 @@ object IncheonTimetableManager {
         val nowSec = toDaySeconds(now)
         val candidatePairs = mutableListOf<Pair<Int, ArrivalInfo>>()
 
-        // 상행 조회 여부 판단
+        // 상행/내선 조회 여부 판단
         val isUpFilter = filter.contains("상행") || filter.contains("내선") ||
                 (lineCode == "I1" && (filter.contains("검단") || filter.contains("계양"))) ||
                 (lineCode == "I2" && (filter.contains("검단오류") || filter.contains("서구청") || filter.contains("아시아드")))
@@ -222,6 +227,22 @@ object IncheonTimetableManager {
         )
     }
 
+    private fun formatDestinationTitle(
+        row: SubwayLocalDatabase.TrainScheduleEntity,
+        directionName: String
+    ): String {
+        val expressTag = when {
+            row.lineCode == "GYEONGCHUN" && row.trainNo.startsWith("S2") -> " (ITX-청춘)"
+            row.isExpress -> " (급행)"
+            else -> ""
+        }
+        if (row.lineCode == "2" && canonicalStationName(row.startStation, "2") == canonicalStationName(row.endStation, "2")) {
+            val circleLabel = if (row.direction == "UP") "내선순환" else "외선순환"
+            return "$circleLabel (${row.endStation}행)"
+        }
+        return if (row.endStation.isNotEmpty()) "${row.endStation}행$expressTag" else "${directionName}방면$expressTag"
+    }
+
     private fun findUpcomingTrains(
         rows: List<SubwayLocalDatabase.TrainScheduleEntity>,
         station: String,
@@ -233,30 +254,34 @@ object IncheonTimetableManager {
         val results = mutableListOf<Pair<Int, ArrivalInfo>>()
 
         for (row in rows) {
-            // 당역 종착 열차는 탑승 대상이 아니므로 제외
-            if (canonicalStationName(row.endStation) == station) {
-                continue
+            val stops = row.stops
+            if (stops.size < 2) continue
+
+            // 종착 정차(마지막 인덱스)를 제외한 승차 가능 정차역 중 현재 시각 이후 가장 빠른 정차 탐색
+            var matchedIdx = -1
+            for (i in 0 until stops.size - 1) {
+                val s = stops[i]
+                if (!s.isStopping) continue
+                if (canonicalStationName(s.stationName, row.lineCode) == station && s.daySeconds >= nowSec) {
+                    matchedIdx = i
+                    break
+                }
             }
+            if (matchedIdx < 0) continue
 
-            val tStr = row.boardingStopTimes[station] ?: continue
-            val tSec = parseTimeToDaySeconds(tStr) ?: continue
-
-            if (tSec < nowSec) continue // 이미 지난 열차
-
-            val expressTag = when {
-                row.lineCode == "GYEONGCHUN" && row.trainNo.startsWith("S2") -> " (ITX-청춘)"
-                row.isExpress -> " (급행)"
-                else -> ""
-            }
-            val destTitle = if (row.endStation.isNotEmpty()) "${row.endStation}행$expressTag" else "${directionName}방면$expressTag"
+            val matchedStop = stops[matchedIdx]
+            val tStr = matchedStop.arrivalTime
+            val tSec = matchedStop.daySeconds
+            val destTitle = formatDestinationTitle(row, directionName)
 
             // 필터링 적용
             if (filter.isNotEmpty() && filter != "양방향") {
-                val filterCanon = canonicalStationName(filter.removeSuffix("행").removeSuffix("방면").trim())
-                val matchesDir = filter.contains(directionName)
+                val filterCanon = canonicalStationName(filter.removeSuffix("행").removeSuffix("방면").trim(), row.lineCode)
+                val matchesDir = filter.contains(directionName) ||
+                        (row.lineCode == "2" && ((row.direction == "UP" && filter.contains("내선")) || (row.direction == "DOWN" && filter.contains("외선"))))
                 val matchesDest = destTitle.contains(filter) ||
                         filter.contains(row.endStation) ||
-                        (filterCanon.isNotEmpty() && canonicalStationName(row.endStation) == filterCanon)
+                        (filterCanon.isNotEmpty() && canonicalStationName(row.endStation, row.lineCode) == filterCanon)
                 if (!matchesDir && !matchesDest) {
                     continue
                 }
@@ -264,7 +289,7 @@ object IncheonTimetableManager {
 
             val diffSeconds = tSec - nowSec
             val formattedTime = formatToHhMmSs(tStr)
-            val detailText = calculateTrainPositionDetail(row, station, tSec, nowSec)
+            val detailText = calculateTrainPositionDetail(row, matchedIdx, station, tSec, nowSec)
 
             results.add(
                 Pair(
@@ -285,26 +310,18 @@ object IncheonTimetableManager {
     }
 
     /**
-     * 현재 시각(nowSec)과 시간표상의 다른 역 도착/출발 시각들을 비교하여
+     * 현재 시각(nowSec)과 시간표상의 이전 경로 역 시각들을 비교하여
      * 해당 열차가 현재 몇 번째 전역(어느 역)에 있는지 계산
      * 단, 조회 역이 출발역이거나 아직 출발역 출발 시각 전인 경우 "출발 대기 (출발역명)" 표출
      */
     private fun calculateTrainPositionDetail(
         row: SubwayLocalDatabase.TrainScheduleEntity,
+        targetIdx: Int,
         targetStation: String,
         targetSec: Int,
         nowSec: Int
     ): String {
-        if (canonicalStationName(row.startStation) == targetStation) {
-            return if (targetSec - nowSec <= 60) "당역 도착 ($targetStation)" else "출발 대기 ($targetStation)"
-        }
-
-        val routeStops = row.allRouteStopTimes.mapNotNull { (stn, timeStr) ->
-            val sec = parseTimeToDaySeconds(timeStr) ?: return@mapNotNull null
-            if (sec <= targetSec) Pair(stn, sec) else null
-        }.sortedBy { it.second }
-
-        val targetIdx = routeStops.indexOfLast { it.first == targetStation }
+        val stops = row.stops
         if (targetIdx <= 0) {
             return if (targetSec - nowSec <= 60) "당역 도착 ($targetStation)" else "출발 대기 ($targetStation)"
         }
@@ -314,22 +331,22 @@ object IncheonTimetableManager {
         }
 
         // 아직 출발역에서 출발하기 전인 경우
-        if (nowSec < routeStops[0].second) {
-            val startStn = routeStops[0].first
-            return "출발 대기 ($startStn)"
+        val originStop = stops[0]
+        if (nowSec < originStop.daySeconds) {
+            return "출발 대기 (${originStop.stationName})"
         }
 
-        // 출발역 이후 ~ 도착역 이전: 현재 시각 이하의 가장 최근 정차역 탐색
+        // 출발역 이후 ~ 도착역 이전: 현재 시각 이하의 가장 최근 통과/정차역 탐색
         var currentIdx = 0
         for (i in 0 until targetIdx) {
-            if (routeStops[i].second <= nowSec) {
+            if (stops[i].daySeconds <= nowSec) {
                 currentIdx = i
             } else {
                 break
             }
         }
         val hops = targetIdx - currentIdx
-        val currentStn = routeStops[currentIdx].first
+        val currentStn = stops[currentIdx].stationName
         return "[$hops]번째 전역 ($currentStn)"
     }
 
@@ -353,20 +370,23 @@ object IncheonTimetableManager {
         var earliestInfo: ArrivalInfo? = null
 
         for ((dir, row) in allRows) {
-            if (canonicalStationName(row.endStation) == station) {
-                continue
+            val stops = row.stops
+            if (stops.size < 2) continue
+
+            var matchedStop: SubwayLocalDatabase.TrainStopEntity? = null
+            for (i in 0 until stops.size - 1) {
+                val s = stops[i]
+                if (s.isStopping && canonicalStationName(s.stationName, row.lineCode) == station) {
+                    matchedStop = s
+                    break
+                }
             }
-            val tStr = row.boardingStopTimes[station] ?: continue
-            val tSec = parseTimeToDaySeconds(tStr) ?: continue
+            val stop = matchedStop ?: continue
+            val tSec = stop.daySeconds
             if (tSec < earliestTimeSec) {
                 earliestTimeSec = tSec
-                val expressTag = when {
-                    row.lineCode == "GYEONGCHUN" && row.trainNo.startsWith("S2") -> " (ITX-청춘)"
-                    row.isExpress -> " (급행)"
-                    else -> ""
-                }
-                val destTitle = if (row.endStation.isNotEmpty()) "${row.endStation}행$expressTag" else "${dir}방면$expressTag"
-                val formattedTime = formatToHhMmSs(tStr)
+                val destTitle = formatDestinationTitle(row, dir)
+                val formattedTime = formatToHhMmSs(stop.arrivalTime)
                 earliestInfo = ArrivalInfo(
                     lineOrBusName = lineName,
                     destination = destTitle,
@@ -396,17 +416,5 @@ object IncheonTimetableManager {
             h += 24
         }
         return h * 3600 + time.minute * 60 + time.second
-    }
-
-    private fun parseTimeToDaySeconds(timeStr: String): Int? {
-        val parts = timeStr.trim().split(":")
-        if (parts.size < 2) return null
-        var h = parts[0].toIntOrNull() ?: return null
-        val m = parts[1].toIntOrNull() ?: return null
-        val s = if (parts.size >= 3) parts[2].toIntOrNull() ?: 0 else 0
-        if (h < 4) {
-            h += 24
-        }
-        return h * 3600 + m * 60 + s
     }
 }

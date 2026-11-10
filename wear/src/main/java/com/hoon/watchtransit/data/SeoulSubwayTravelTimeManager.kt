@@ -6,8 +6,8 @@ import java.util.PriorityQueue
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * 서울교통공사, 인천교통공사(1·2호선·7호선 연장), 공항철도 및 코레일 광역전철(1호선 전 구간, 4호선 진접·과천·안산선,
- * 수인분당선, 경의중앙선, 경춘선, 서해선)의 역간 소요시간 데이터를 내부 SQLite DB(SubwayLocalDatabase)에서 로드하여
+ * 서울교통공사(1~9호선 전 구간), 인천교통공사(1·2호선·7호선 연장), 공항철도 및 코레일 광역전철
+ * (수인분당선, 경의중앙선, 경춘선, 서해선)의 역간 소요시간 데이터를 내부 SQLite DB(SubwayLocalDatabase)에서 로드하여
  * 역 간 실시간 소요시간(초) 및 남은 역 수를 정밀 계산하는 매니저
  */
 object SeoulSubwayTravelTimeManager {
@@ -133,8 +133,7 @@ object SeoulSubwayTravelTimeManager {
             }
         }
 
-        // 2. 코레일·광역전철 역간 그래프 간선 테이블(subway_graph_edges) 로드 및 병합
-        // (1호선 전 구간, 4호선 진접·과천·안산선, 수인분당선, 경의중앙선, 경춘선, 서해선 등)
+        // 2. 서울 1~9호선 전 구간 및 코레일·광역전철 역간 그래프 간선 테이블(subway_graph_edges) 로드 및 병합
         val graphEdges = SubwayLocalDatabase.getGraphEdges(context)
         for (edge in graphEdges) {
             val lineNum = edge.lineCode.trim()
@@ -145,7 +144,7 @@ object SeoulSubwayTravelTimeManager {
             registerStationAlias(lineAliasMap, v)
 
             val adj = graphsByLine.getOrPut(lineNum) { mutableMapOf() }
-            // 기존 서울교통공사 공식 구간 값이 있으면 유지하고, 없는 구간(과천·안산·진접선, 경부·경인·경원선 등)을 채움
+            // 기존 서울교통공사 공식 구간 값이 있으면 유지하고, 없는 구간(과천·안산·진접선, 일산선, 별내선, 9호선, 경부·경인·경원선 등)을 채움
             if (adj[u]?.containsKey(v) != true) {
                 addEdge(lineNum, u, v, edge.travelSeconds)
             }
@@ -202,6 +201,9 @@ object SeoulSubwayTravelTimeManager {
             map["불암산"] = "당고개"
             map["불암산역"] = "당고개"
             map["당고개"] = "당고개"
+            map["별가람"] = "별내별가람"
+            map["별가람역"] = "별내별가람"
+            map["별내별가람"] = "별내별가람"
             map["이수"] = "총신대입구"
             map["이수역"] = "총신대입구"
             map["총신대"] = "총신대입구"
@@ -236,6 +238,15 @@ object SeoulSubwayTravelTimeManager {
         aliasesByLine["6"]?.let { map ->
             map["신내"] = "신내역"
             map["신내역"] = "신내역"
+        }
+        // 7호선 뚝섬유원지 / 자양, 총신대입구(이수) / 이수
+        aliasesByLine["7"]?.let { map ->
+            map["뚝섬유원지"] = "자양"
+            map["뚝섬유원지역"] = "자양"
+            map["자양"] = "자양"
+            map["총신대입구"] = "이수"
+            map["총신대입구(이수)"] = "이수"
+            map["이수"] = "이수"
         }
         // 수인분당선 특수 별칭
         aliasesByLine["SUIN"]?.let { map ->

@@ -12,14 +12,14 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * 지하철 노선별 역간 소요시간 및 전체 노선/역 시간표를 관리하는 내부 SQLite 데이터베이스 매니저
  * - assets/database/subway_transit.db 초기 시드 DB를 앱 내부 DB 경로(databases/subway_transit.db)로 복사하여 사용
- * - 서울 1~8호선, 인천 1·2호선, 공항철도, 코레일 1호선(경부·장항·경인·경원·광명셔틀), 4호선(진접·과천·안산선),
- *   수인분당선, 경의중앙선, 경춘선(ITX-청춘 포함), 서해선 및 향후 추가될 모든 노선/역 시간표를 통합 수용
+ * - 서울 1~9호선(코레일 직결·연장 전 구간 포함), 인천 1·2호선, 공항철도, 수인분당선, 경의중앙선,
+ *   경춘선(ITX-청춘 포함), 서해선 및 향후 추가될 모든 노선/역 시간표를 통합 수용
  */
 object SubwayLocalDatabase {
     private const val TAG = "SubwayLocalDB"
     private const val DB_NAME = "subway_transit.db"
     private const val ASSET_DB_PATH = "database/$DB_NAME"
-    private const val DB_VERSION = 2
+    private const val DB_VERSION = 3
 
     data class TravelTimeEntity(
         val seq: Int,
@@ -57,9 +57,10 @@ object SubwayLocalDatabase {
         val isExpress: Boolean,
         val stops: List<TrainStopEntity>
     ) {
-        // 정차역 시각 맵 (승하차 가능 역만)
+        // 정차역 시각 맵 (종착역 하차 전용 정차를 제외한 승차 가능 정차역 기준)
         val boardingStopTimes: Map<String, String> by lazy {
-            stops.filter { it.isStopping }.associate { it.stationName to it.arrivalTime }
+            val boardable = if (stops.size > 1) stops.subList(0, stops.size - 1) else stops
+            boardable.filter { it.isStopping }.associate { it.stationName to it.arrivalTime }
         }
         // 통과 시각 포함 전체 경로 역 시각 맵 (현재 위치 추적용)
         val allRouteStopTimes: Map<String, String> by lazy {
@@ -175,22 +176,16 @@ object SubwayLocalDatabase {
         db.execSQL(
             """
             CREATE TABLE IF NOT EXISTS timetable_stops (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 train_id INTEGER NOT NULL,
-                line_code TEXT NOT NULL,
-                day_type TEXT NOT NULL,
-                direction TEXT NOT NULL,
-                station_name TEXT NOT NULL,
                 stop_seq INTEGER NOT NULL,
+                station_name TEXT NOT NULL,
                 arrival_time TEXT NOT NULL,
                 day_seconds INTEGER NOT NULL,
                 is_stopping INTEGER NOT NULL DEFAULT 1,
-                FOREIGN KEY(train_id) REFERENCES timetable_trains(train_id)
-            )
+                PRIMARY KEY (train_id, stop_seq)
+            ) WITHOUT ROWID
             """.trimIndent()
         )
-        db.execSQL("CREATE INDEX IF NOT EXISTS idx_stops_station_lookup ON timetable_stops(line_code, day_type, direction, station_name, is_stopping, day_seconds)")
-        db.execSQL("CREATE INDEX IF NOT EXISTS idx_stops_train ON timetable_stops(train_id, stop_seq)")
 
         db.execSQL(
             """
@@ -248,7 +243,7 @@ object SubwayLocalDatabase {
     }
 
     /**
-     * 코레일·광역전철(1호선 전 구간, 4호선 진접·과천·안산선, 수인분당선, 경의중앙선, 경춘선, 서해선 등)의
+     * 서울 1~9호선 전 구간 및 코레일·광역전철(수인분당선, 경의중앙선, 경춘선, 서해선 등)의
      * 역간 인접 그래프 간선(edge) 및 소요시간(초) 목록 조회
      */
     fun getGraphEdges(context: Context): List<GraphEdgeEntity> = runCatching {
@@ -341,10 +336,11 @@ object SubwayLocalDatabase {
 
         db.rawQuery(
             """
-            SELECT train_id, station_name, stop_seq, arrival_time, day_seconds, is_stopping
-            FROM timetable_stops
-            WHERE line_code = ? AND day_type = ? AND direction = ?
-            ORDER BY train_id ASC, stop_seq ASC
+            SELECT s.train_id, s.station_name, s.stop_seq, s.arrival_time, s.day_seconds, s.is_stopping
+            FROM timetable_stops s
+            INNER JOIN timetable_trains t ON s.train_id = t.train_id
+            WHERE t.line_code = ? AND t.day_type = ? AND t.direction = ?
+            ORDER BY s.train_id ASC, s.stop_seq ASC
             """.trimIndent(),
             arrayOf(lineCode, dayType, direction)
         ).use { cursor ->
