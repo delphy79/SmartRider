@@ -26,6 +26,7 @@ import androidx.wear.tiles.TileBuilders
 import androidx.wear.tiles.TileService
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import com.hoon.watchtransit.data.SubwayCoordinates
 import com.hoon.watchtransit.data.TransitLocationCache
 import com.hoon.watchtransit.data.TransitWatchStorage
 import com.hoon.watchtransit.model.ArrivalInfo
@@ -50,7 +51,7 @@ import kotlin.coroutines.resume
  */
 class TransitTileService : TileService() {
     private val serviceScope = CoroutineScope(Dispatchers.IO)
-    private val RESOURCES_VERSION = "6"
+    private val RESOURCES_VERSION = "7"
 
     override fun onTileResourcesRequest(requestParams: RequestBuilders.ResourcesRequest): ListenableFuture<ResourceBuilders.Resources> {
         return Futures.immediateFuture(
@@ -61,7 +62,6 @@ class TransitTileService : TileService() {
     }
 
     override fun onTileRequest(requestParams: RequestBuilders.TileRequest): ListenableFuture<TileBuilders.Tile> {
-        val lastClickableId = requestParams.currentState?.lastClickableId
 
         // 백그라운드 GPS 위치 갱신 트리거
         triggerLocationUpdate()
@@ -69,7 +69,7 @@ class TransitTileService : TileService() {
         return CallbackToFutureAdapter.getFuture { completer ->
             serviceScope.launch {
                 try {
-                    val tile = buildTile(lastClickableId)
+                    val tile = buildTile()
                     completer.set(tile)
                 } catch (e: Exception) {
                     completer.setException(e)
@@ -79,7 +79,7 @@ class TransitTileService : TileService() {
         }
     }
 
-    private suspend fun buildTile(lastClickableId: String?): TileBuilders.Tile {
+    private suspend fun buildTile(): TileBuilders.Tile {
         val storage = TransitWatchStorage(this)
         val rawTargets = storage.savedTargetsFlow.first()
 
@@ -122,18 +122,8 @@ class TransitTileService : TileService() {
 
         // 2. 현재 위치랑 가까운 곳부터 순서대로 목록 정렬
         val sortedTargets = sortTargetsByProximity(rawTargets, userLocation)
-        val totalCount = sortedTargets.size
-
-        // 3. 타일이 새로 실행되거나 열릴 때는 무조건 0번(가장 가까운 곳)부터 표시!
-        // 사용자가 명시적으로 ◀ / ▶ 버튼을 터치한 경우에만 해당 인덱스로 즉각 전환
-        val currentIndex = if (!lastClickableId.isNullOrEmpty() && lastClickableId.startsWith("nav_goto_")) {
-            val reqIdx = lastClickableId.removePrefix("nav_goto_").toIntOrNull() ?: 0
-            ((reqIdx % totalCount) + totalCount) % totalCount
-        } else {
-            0
-        }
-
-        val (target, _) = sortedTargets[currentIndex]
+        // 이동 버튼 기능 삭제: 무조건 가장 가까운 곳 1개만 표시 (12시 기준 2개인 역 2번째 분기 유지)
+        val (target, _) = sortedTargets.first()
         val repository = ArrivalRepository(this)
         val arrivals = runCatching { repository.fetchArrivals(target) }.getOrDefault(emptyList())
             .sortedBy { ArrivalRepository.getEffectiveRemainSeconds(it) }
@@ -149,8 +139,6 @@ class TransitTileService : TileService() {
             direction = dirStr,
             firstArrival = firstArrival,
             secondArrival = secondArrival,
-            currentIndex = currentIndex,
-            totalCount = totalCount
         )
 
         return TileBuilders.Tile.Builder()
@@ -205,8 +193,6 @@ class TransitTileService : TileService() {
         direction: String,
         firstArrival: ArrivalInfo?,
         secondArrival: ArrivalInfo?,
-        currentIndex: Int,
-        totalCount: Int
     ): TimelineBuilders.Timeline {
         val timelineBuilder = TimelineBuilders.Timeline.Builder()
         val nowMs = System.currentTimeMillis()
@@ -217,8 +203,6 @@ class TransitTileService : TileService() {
                 direction = direction,
                 arrivalTime = "도착 정보 없음",
                 secondArrival = "",
-                currentIndex = currentIndex,
-                totalCount = totalCount
             )
             timelineBuilder.addTimelineEntry(
                 TimelineBuilders.TimelineEntry.Builder()
@@ -265,8 +249,6 @@ class TransitTileService : TileService() {
                 direction = direction,
                 arrivalTime = arrivalTimeStr,
                 secondArrival = secondTimeStr,
-                currentIndex = currentIndex,
-                totalCount = totalCount
             )
 
             timelineBuilder.addTimelineEntry(
@@ -360,8 +342,6 @@ class TransitTileService : TileService() {
         direction: String,
         arrivalTime: String,
         secondArrival: String,
-        currentIndex: Int,
-        totalCount: Int
     ): LayoutElementBuilders.LayoutElement {
         val openAppClickModifier = ModifiersBuilders.Modifiers.Builder()
             .setClickable(
@@ -436,7 +416,6 @@ class TransitTileService : TileService() {
             .build()
 
         // 5. 이전/다음 역(◀ / ▶) 이동 컨트롤 (user_img4.png: ◀ 2/8 ▶)
-        val navigationRow = buildNavigationRow(currentIndex, totalCount)
 
         // 메인 컨텐츠 칼럼
         val column = Column.Builder()
@@ -450,7 +429,6 @@ class TransitTileService : TileService() {
             .addContent(Spacer.Builder().setHeight(dp(2f)).build())
             .addContent(next)
             .addContent(Spacer.Builder().setHeight(dp(6f)).build())
-            .addContent(navigationRow)
             .build()
 
         return Box.Builder()
@@ -460,96 +438,6 @@ class TransitTileService : TileService() {
             .setHorizontalAlignment(LayoutElementBuilders.HORIZONTAL_ALIGN_CENTER)
             .setVerticalAlignment(LayoutElementBuilders.VERTICAL_ALIGN_CENTER)
             .addContent(column)
-            .build()
-    }
-
-    /**
-     * 좌우 목록 이동 컨트롤 바:
-     * - 등록된 역이 2개 이상일 때 ◀ / ▶ 터치 버튼과 (1/N) 인덱스 표시
-     * - 거리순으로 정렬된 목록을 ◀ / ▶로 자유롭게 순회
-     */
-    private fun buildNavigationRow(currentIndex: Int, totalCount: Int): LayoutElementBuilders.LayoutElement {
-        if (totalCount <= 1) {
-            return Text.Builder()
-                .setText("탭하여 전체보기")
-                .setFontStyle(
-                    LayoutElementBuilders.FontStyle.Builder()
-                        .setSize(sp(11f))
-                        .setColor(argb(0xFF64748B.toInt()))
-                        .build()
-                )
-                .build()
-        }
-
-        val prevIdx = ((currentIndex - 1) % totalCount + totalCount) % totalCount
-        val nextIdx = (currentIndex + 1) % totalCount
-
-        // ◀ 이전 역 버튼
-        val prevButton = buildNavButton("◀", "nav_goto_$prevIdx")
-
-        // 현재 순서 번호 (예: 2 / 8)
-        val pageIndicator = Text.Builder()
-            .setText("${currentIndex + 1} / $totalCount")
-            .setFontStyle(
-                LayoutElementBuilders.FontStyle.Builder()
-                    .setSize(sp(12f))
-                    .setWeight(LayoutElementBuilders.FONT_WEIGHT_BOLD)
-                    .setColor(argb(0xFFCBD5E1.toInt()))
-                    .build()
-            )
-            .build()
-
-        // ▶ 다음 역 버튼
-        val nextButton = buildNavButton("▶", "nav_goto_$nextIdx")
-
-        return Row.Builder()
-            .setVerticalAlignment(LayoutElementBuilders.VERTICAL_ALIGN_CENTER)
-            .addContent(prevButton)
-            .addContent(Spacer.Builder().setWidth(dp(10f)).build())
-            .addContent(pageIndicator)
-            .addContent(Spacer.Builder().setWidth(dp(10f)).build())
-            .addContent(nextButton)
-            .build()
-    }
-
-    private fun buildNavButton(label: String, clickableId: String): LayoutElementBuilders.LayoutElement {
-        val clickModifier = ModifiersBuilders.Modifiers.Builder()
-            .setClickable(
-                ModifiersBuilders.Clickable.Builder()
-                    .setId(clickableId)
-                    .setOnClick(ActionBuilders.LoadAction.Builder().build())
-                    .build()
-            )
-            .setBackground(
-                ModifiersBuilders.Background.Builder()
-                    .setColor(argb(0xFF262C3A.toInt()))
-                    .setCorner(
-                        ModifiersBuilders.Corner.Builder()
-                            .setRadius(dp(14f))
-                            .build()
-                    )
-                    .build()
-            )
-            .build()
-
-        val text = Text.Builder()
-            .setText(label)
-            .setFontStyle(
-                LayoutElementBuilders.FontStyle.Builder()
-                    .setSize(sp(13f))
-                    .setWeight(LayoutElementBuilders.FONT_WEIGHT_BOLD)
-                    .setColor(argb(0xFF60A5FA.toInt())) // Sky Blue Accent
-                    .build()
-            )
-            .build()
-
-        return Box.Builder()
-            .setWidth(dp(34f))
-            .setHeight(dp(28f))
-            .setModifiers(clickModifier)
-            .setHorizontalAlignment(LayoutElementBuilders.HORIZONTAL_ALIGN_CENTER)
-            .setVerticalAlignment(LayoutElementBuilders.VERTICAL_ALIGN_CENTER)
-            .addContent(text)
             .build()
     }
 
@@ -708,27 +596,10 @@ class TransitTileService : TileService() {
         if (target.lat != 0.0 && target.lon != 0.0) {
             return Pair(target.lat, target.lon)
         }
-        val name = target.name.removeSuffix("역").trim()
-        return when {
-            name.contains("계양") -> Pair(37.5715, 126.7360)
-            name.contains("신검단중앙") -> Pair(37.6042, 126.7118)
-            name.contains("완정") -> Pair(37.5929, 126.6730)
-            name.contains("마전") -> Pair(37.6006, 126.6669)
-            name.contains("검단사거리") -> Pair(37.6025, 126.6575)
-            name.contains("서울역") || name == "서울" -> Pair(37.5547, 126.9706)
-            name.contains("선바위") -> Pair(37.4518, 127.0029)
-            name.contains("정부과천청사") -> Pair(37.4265, 126.9899)
-            name.contains("과천") -> Pair(37.4337, 126.9967)
-            name.contains("지식산업단지") -> Pair(37.4116, 126.9890)
-            name.contains("강남") -> Pair(37.4979, 127.0276)
-            name.contains("신도림") -> Pair(37.5088, 126.8913)
-            name.contains("홍대입구") -> Pair(37.5575, 126.9244)
-            name.contains("인천공항") -> Pair(37.4475, 126.4526)
-            name.contains("김포공항") -> Pair(37.5623, 126.8015)
-            name.contains("부평") -> Pair(37.4895, 126.7248)
-            name.contains("송도달빛축제공원") -> Pair(37.3995, 126.6339)
-            else -> Pair(37.5, 127.0)
+        SubwayCoordinates.get(target.name)?.let {
+            return it
         }
+        return Pair(37.5, 127.0)
     }
 
     private fun getDistanceMeters(userLoc: Location?, target: TransitTarget): Float? {

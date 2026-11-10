@@ -39,6 +39,7 @@ import androidx.core.content.ContextCompat
 import androidx.wear.compose.material.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
+import com.hoon.watchtransit.data.SubwayCoordinates
 import com.hoon.watchtransit.data.TransitLocationCache
 import com.hoon.watchtransit.data.TransitWatchStorage
 import com.hoon.watchtransit.model.ArrivalInfo
@@ -772,27 +773,10 @@ private fun getStationLocation(target: TransitTarget): Pair<Double, Double> {
     if (target.lat != 0.0 && target.lon != 0.0) {
         return Pair(target.lat, target.lon)
     }
-    val name = target.name.removeSuffix("역").trim()
-    return when {
-        name.contains("계양") -> Pair(37.5715, 126.7360)
-        name.contains("신검단중앙") -> Pair(37.6042, 126.7118)
-        name.contains("완정") -> Pair(37.5929, 126.6730)
-        name.contains("마전") -> Pair(37.6006, 126.6669)
-        name.contains("검단사거리") -> Pair(37.6025, 126.6575)
-        name.contains("서울역") || name == "서울" -> Pair(37.5547, 126.9706)
-        name.contains("선바위") -> Pair(37.4518, 127.0029)
-        name.contains("정부과천청사") -> Pair(37.4265, 126.9899)
-        name.contains("과천") -> Pair(37.4337, 126.9967)
-        name.contains("지식산업단지") -> Pair(37.4116, 126.9890)
-        name.contains("강남") -> Pair(37.4979, 127.0276)
-        name.contains("신도림") -> Pair(37.5088, 126.8913)
-        name.contains("홍대입구") -> Pair(37.5575, 126.9244)
-        name.contains("인천공항") -> Pair(37.4475, 126.4526)
-        name.contains("김포공항") -> Pair(37.5623, 126.8015)
-        name.contains("부평") -> Pair(37.4895, 126.7248)
-        name.contains("송도달빛축제공원") -> Pair(37.3995, 126.6339)
-        else -> Pair(37.5, 127.0)
+    SubwayCoordinates.get(target.name)?.let {
+        return it
     }
+    return Pair(37.5, 127.0)
 }
 
 private fun getDistanceMeters(userLoc: Location?, target: TransitTarget): Float? {

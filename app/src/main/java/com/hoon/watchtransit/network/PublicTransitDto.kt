@@ -75,7 +75,9 @@ data class SeoulBusStopItem(
     @SerialName("STOPS_NO") val stopsNo: String = "",
     @SerialName("STOPS_NM") val stopsNm: String = "",
     @SerialName("NODE_ID") val nodeId: String = "",
-    @SerialName("STOPS_TYPE") val stopsType: String = ""
+    @SerialName("STOPS_TYPE") val stopsType: String = "",
+    @SerialName("XCRD") val xcrd: String = "",
+    @SerialName("YCRD") val ycrd: String = ""
 )
 
 // 4. 국토교통부(TAGO) 도시코드 목록 조회 API 응답 DTO

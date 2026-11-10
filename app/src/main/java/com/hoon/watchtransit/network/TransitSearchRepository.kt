@@ -2,6 +2,7 @@
 
 import android.content.Context
 import android.util.Log
+import com.hoon.watchtransit.data.SubwayCoordinates
 import com.hoon.watchtransit.model.TransitCity
 import com.hoon.watchtransit.model.TransitTarget
 import com.hoon.watchtransit.model.TransitType
@@ -222,25 +223,7 @@ class TransitSearchRepository(context: Context) {
     }
 
     private fun lookupSubwayCoords(stationName: String): Pair<Double, Double> {
-        val clean = stationName.removeSuffix("역").trim()
-        return when {
-            clean.contains("계양") -> Pair(37.5715, 126.7360)
-            clean.contains("신검단중앙") -> Pair(37.6042, 126.7118)
-            clean.contains("완정") -> Pair(37.5929, 126.6730)
-            clean.contains("마전") -> Pair(37.6006, 126.6669)
-            clean.contains("검단사거리") -> Pair(37.6025, 126.6575)
-            clean.contains("서울역") || clean == "서울" -> Pair(37.5547, 126.9706)
-            clean.contains("선바위") -> Pair(37.4518, 127.0029)
-            clean.contains("정부과천청사") -> Pair(37.4265, 126.9899)
-            clean.contains("과천") -> Pair(37.4337, 126.9967)
-            clean.contains("지식산업단지") -> Pair(37.4116, 126.9890)
-            clean.contains("강남") -> Pair(37.4979, 127.0276)
-            clean.contains("신도림") -> Pair(37.5088, 126.8913)
-            clean.contains("홍대입구") -> Pair(37.5575, 126.9244)
-            clean.contains("부평") -> Pair(37.4895, 126.7248)
-            clean.contains("송도달빛축제공원") -> Pair(37.3995, 126.6339)
-            else -> Pair(0.0, 0.0)
-        }
+        return SubwayCoordinates.get(stationName) ?: Pair(0.0, 0.0)
     }
 
     private fun formatLineName(rawLine: String): String {
@@ -265,8 +248,8 @@ class TransitSearchRepository(context: Context) {
                     targetCode = item.stopsNo.ifEmpty { item.nodeId },
                     subCode = if (item.nodeId.isNotEmpty()) item.nodeId else item.stopsType,
                     directionOrRoute = "11",
-                    lat = 0.0,
-                    lon = 0.0
+                    lat = item.ycrd.toDoubleOrNull() ?: 0.0,
+                    lon = item.xcrd.toDoubleOrNull() ?: 0.0
                 )
             } ?: emptyList()
         }.onFailure { e ->
@@ -397,4 +380,3 @@ class TransitSearchRepository(context: Context) {
         }
     }
 }
-
