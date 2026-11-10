@@ -2,14 +2,12 @@ package com.hoon.watchtransit.data
 
 import android.content.Context
 import android.util.Log
-import java.io.BufferedReader
-import java.io.InputStreamReader
 import java.util.PriorityQueue
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * 서울교통공사, 인천교통공사(1·2호선·7호선 연장), 공항철도 공식 역간거리 및 소요시간 데이터를 기반으로
- * 역 간 실시간 소요시간(초) 및 남은 역 수를 정밀 계산하는 매니저
+ * 서울교통공사, 인천교통공사(1·2호선·7호선 연장), 공항철도 공식 역간거리 및 소요시간 데이터를
+ * 내부 SQLite DB(SubwayLocalDatabase)에서 로드하여 역 간 실시간 소요시간(초) 및 남은 역 수를 정밀 계산하는 매니저
  */
 object SeoulSubwayTravelTimeManager {
     private const val TAG = "SeoulTravelTime"
@@ -34,50 +32,35 @@ object SeoulSubwayTravelTimeManager {
     }
 
     /**
-     * CSV 데이터를 로드하여 호선별 그래프 및 역명 별칭 매핑 생성
+     * 내부 SQLite DB 데이터를 로드하여 호선별 그래프 및 역명 별칭 매핑 생성
      */
     fun ensureInitialized(context: Context) {
         if (isInitialized) return
         synchronized(this) {
             if (isInitialized) return
             try {
-                loadData(context)
+                loadDataFromDb(context)
                 isInitialized = true
-                Log.d(TAG, "Subway travel time data initialized successfully.")
+                Log.d(TAG, "Subway travel time data initialized from internal SQLite DB.")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to initialize subway travel time data", e)
+                Log.e(TAG, "Failed to initialize subway travel time data from DB", e)
             }
         }
     }
 
-    private fun loadData(context: Context) {
+    private fun loadDataFromDb(context: Context) {
         val rowsByLine = mutableMapOf<String, MutableList<StationRow>>()
         val aliasesByLine = mutableMapOf<String, MutableMap<String, String>>()
 
-        val inputStream = context.assets.open("timetable/seoul_subway_travel_time.csv")
+        val dbRows = SubwayLocalDatabase.getTravelTimeRows(context)
+        for (entity in dbRows) {
+            val lineNum = entity.lineCode.trim()
+            val stn = entity.stationName.trim()
+            val row = StationRow(entity.seq, lineNum, stn, entity.travelSeconds)
+            rowsByLine.getOrPut(lineNum) { mutableListOf() }.add(row)
 
-        BufferedReader(InputStreamReader(inputStream, Charsets.UTF_8)).use { reader ->
-            val header = reader.readLine() // 연번,호선,역명,소요시간,역간거리,누계거리
-            var lineStr: String?
-            while (reader.readLine().also { lineStr = it } != null) {
-                val line = lineStr?.trim() ?: continue
-                if (line.isEmpty()) continue
-
-                val tokens = line.split(",")
-                if (tokens.size >= 4) {
-                    val seq = tokens[0].trim().toIntOrNull() ?: continue
-                    val lineNum = tokens[1].trim()
-                    val stn = tokens[2].trim()
-                    val travelSec = parseMmSsToSeconds(tokens[3].trim())
-
-                    val row = StationRow(seq, lineNum, stn, travelSec)
-                    rowsByLine.getOrPut(lineNum) { mutableListOf() }.add(row)
-
-                    // 역명 별칭 매핑 등록
-                    val lineAliasMap = aliasesByLine.getOrPut(lineNum) { mutableMapOf() }
-                    registerStationAlias(lineAliasMap, stn)
-                }
-            }
+            val lineAliasMap = aliasesByLine.getOrPut(lineNum) { mutableMapOf() }
+            registerStationAlias(lineAliasMap, stn)
         }
 
         // 호선별 특수 역명 별칭 추가 등록
@@ -148,7 +131,7 @@ object SeoulSubwayTravelTimeManager {
                     }
                 }
                 else -> {
-                    // 3, 4, 7, 8호선 및 인천1호선(I1), 인천2호선(I2), 공항철도(AREX) 순차 연결
+                    // 3, 4, 7, 8호선 및 인천1호선(I1), 인천2호선(I2), 공항철도(AREX) 및 향후 추가 노선 순차 연결
                     for (i in 0 until rows.size - 1) {
                         addEdge(rows[i].station, rows[i + 1].station, rows[i + 1].travelSec)
                     }
@@ -222,14 +205,6 @@ object SeoulSubwayTravelTimeManager {
         }
     }
 
-    private fun parseMmSsToSeconds(timeStr: String): Int {
-        val parts = timeStr.split(":")
-        if (parts.size != 2) return 0
-        val m = parts[0].toIntOrNull() ?: 0
-        val s = parts[1].toIntOrNull() ?: 0
-        return m * 60 + s
-    }
-
     /**
      * 호선 식별자(subwayId "1004", "1065" 등 또는 노선명 "4호선", "인천1호선", "공항철도")에서 호선 코드 추출
      */
@@ -247,7 +222,15 @@ object SeoulSubwayTravelTimeManager {
             clean == "1006" || clean.contains("6호선") -> "6"
             clean == "1007" || clean.contains("7호선") -> "7"
             clean == "1008" || clean.contains("8호선") -> "8"
-            clean.all { it.isDigit() } && clean.toIntOrNull() in 1..8 -> clean
+            clean == "1009" || clean.contains("9호선") -> "9"
+            clean == "1063" || clean.contains("경의중앙") -> "GYEONGUI"
+            clean == "1067" || clean.contains("경춘") -> "GYEONGCHUN"
+            clean == "1075" || clean.contains("수인분당") -> "SUIN"
+            clean == "1077" || clean.contains("신분당") -> "SHINBUNDANG"
+            clean == "1081" || clean.contains("신림") -> "SILLIM"
+            clean == "1092" || clean.contains("우이신설") -> "UI"
+            clean == "1093" || clean.contains("서해") -> "SEOHAE"
+            clean.all { it.isDigit() } && clean.toIntOrNull() in 1..9 -> clean
             else -> null
         }
     }
@@ -268,8 +251,8 @@ object SeoulSubwayTravelTimeManager {
 
     /**
      * 출발역(열차 현재 위치)에서 도착역(사용자 조회 역)까지의 공식 소요시간(초)을 계산
-     * 
-     * @return 구간 내 경로가 존재하면 누적 소요시간(초), 파일에 없는 역이거나 경로가 없으면 null 반환
+     *
+     * @return 구간 내 경로가 존재하면 누적 소요시간(초), DB에 없는 역이거나 경로가 없으면 null 반환
      */
     fun getTravelSeconds(
         context: Context,

@@ -5,10 +5,10 @@ import android.util.Log
 import com.hoon.watchtransit.data.ArexTimetableManager
 import com.hoon.watchtransit.data.IncheonTimetableManager
 import com.hoon.watchtransit.data.SeoulSubwayTravelTimeManager
+import com.hoon.watchtransit.data.SubwayLocalDatabase
 import com.hoon.watchtransit.model.ArrivalInfo
 import com.hoon.watchtransit.model.TransitTarget
 import com.hoon.watchtransit.model.TransitType
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -17,7 +17,6 @@ import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Path
 import retrofit2.http.Query
-import java.io.File
 import java.time.DayOfWeek
 import java.time.Duration
 import java.time.LocalDate
@@ -162,12 +161,12 @@ class ArrivalRepository(private val context: Context? = null) {
         val filter = target.directionOrRoute.trim()
         val defaultLineName = target.subCode.ifEmpty { "지하철" }
 
-        // 1. 인천도시철도(인천1호선, 인천2호선)는 첨부된 공식 CSV 시간표 기반으로 정확한 도착 시각 표출
+        // 1. 인천도시철도(인천1호선, 인천2호선)는 내부 SQLite DB 시간표 기반으로 정확한 도착 시각 표출
         if (isIncheonSubway(target)) {
             if (context != null) {
-                val csvArrivals = IncheonTimetableManager.getArrivals(context, target)
-                if (csvArrivals.isNotEmpty()) {
-                    return csvArrivals.take(2)
+                val dbArrivals = IncheonTimetableManager.getArrivals(context, target)
+                if (dbArrivals.isNotEmpty()) {
+                    return dbArrivals.take(2)
                 }
             }
             val incheonArrivals = calculateIncheonSubwayArrivals(target)
@@ -180,7 +179,7 @@ class ArrivalRepository(private val context: Context? = null) {
         val isArexTerminalOrigin = (targetSubwayId == "1065" || ArexTimetableManager.isArex(target)) &&
                 (cleanName == "서울" || cleanName == "인천공항2터미널")
 
-        // 공항철도 시발역(서울역, 인천공항2터미널역)은 출발 시간표가 가장 정확하며 전역이 없으므로 공식 시간표 우선 적용
+        // 공항철도 시발역(서울역, 인천공항2터미널역)은 출발 시간표가 가장 정확하며 전역이 없으므로 내부 DB 공식 시간표 우선 적용
         if (isArexTerminalOrigin && context != null) {
             val arexArrivals = ArexTimetableManager.getArrivals(context, target)
             if (arexArrivals.isNotEmpty()) {
@@ -210,7 +209,7 @@ class ArrivalRepository(private val context: Context? = null) {
                     else item.trainLineNm.contains(filter) || item.updnLine.contains(filter) ||
                             (item.bstatnNm.isNotEmpty() && item.bstatnNm.contains(filter))
                 }
-                // 4) 도착 순서 정렬 (남은 시간/거리 기준 오름차순, 서울교통공사/인천교통공사/공항철도 소요시간 데이터 우선 적용)
+                // 4) 도착 순서 정렬 (남은 시간/거리 기준 오름차순, 내부 DB 역간 소요시간 데이터 우선 적용)
                 .sortedBy { item ->
                     calculateEstimatedArrivalSeconds(item, cleanName)
                 }
@@ -241,7 +240,7 @@ class ArrivalRepository(private val context: Context? = null) {
             return realtimeList.take(2)
         }
 
-        // 3. 공항철도 역이고 실시간 정보가 없는 경우 공식 CSV 시간표 기반으로 도착 시각 표출
+        // 3. 공항철도 역이고 실시간 정보가 없는 경우 내부 DB 공식 시간표 기반으로 도착 시각 표출
         if (ArexTimetableManager.isArex(target) || ArexTimetableManager.isArexStation(target.name)) {
             if (context != null) {
                 val arexArrivals = ArexTimetableManager.getArrivals(context, target)
@@ -251,7 +250,16 @@ class ArrivalRepository(private val context: Context? = null) {
             }
         }
 
-        // 4. 서울시 정적 시간표 API(다운로드 캐시 포함) 조회
+        // 4. 차후 내부 DB(timetable_trains / timetable_stops)에 추가된 타 노선 시간표가 있는 경우 DB에서 조회
+        val lineCode = SeoulSubwayTravelTimeManager.extractLineNumber(target.subCode) ?: target.subCode.trim()
+        if (context != null && lineCode.isNotEmpty() && SubwayLocalDatabase.hasLineTimetable(context, lineCode)) {
+            val dbLineArrivals = IncheonTimetableManager.getArrivalsByLineCode(context, lineCode, defaultLineName, target)
+            if (dbLineArrivals.isNotEmpty()) {
+                return dbLineArrivals.take(2)
+            }
+        }
+
+        // 5. 서울시 정적 시간표 API 및 내부 SQLite DB(station_static_timetables) 조회
         val timetableArrivals = fetchSubwayTimetableArrivals(target)
         if (timetableArrivals.isNotEmpty()) {
             return timetableArrivals.take(2)
@@ -328,8 +336,8 @@ class ArrivalRepository(private val context: Context? = null) {
 
     /**
      * 실시간 열차의 도착 예정 시간(초)을 정밀 계산하여 도착 순서대로 정렬하기 위한 헬퍼
-     * 서울교통공사·인천교통공사·공항철도 역간 소요시간 파일에 존재하는 구간은 파일 데이터를 우선 적용하고,
-     * 파일에 없는 역 구간(코레일 평촌, 인덕원 등)은 기존 알고리즘(160초 배수 등)을 그대로 유지하며,
+     * 내부 SQLite DB 역간 소요시간 테이블에 존재하는 구간은 DB 데이터를 우선 적용하고,
+     * DB에 없는 역 구간(코레일 평촌, 인덕원 등)은 기존 알고리즘(160초 배수 등)을 그대로 유지하며,
      * 실시간 도착정보 생성시각(recptnDt)과 현재 시각의 경과 시간(초)을 차감하여 보정
      */
     private fun calculateEstimatedArrivalSeconds(item: SubwayRealtimeItem, targetStationName: String): Int {
@@ -339,7 +347,7 @@ class ArrivalRepository(private val context: Context? = null) {
 
         val elapsedSec = getElapsedSecondsFromRecptnDt(item.recptnDt)
 
-        // 2. 역간 소요시간 파일 데이터 적용 시도 (서울1~8호선, 인천1·2호선, 공항철도)
+        // 2. 내부 DB 역간 소요시간 데이터 적용 시도 (서울1~8호선, 인천1·2호선, 공항철도 및 추가 노선)
         val currentStation = item.arvlMsg3.ifBlank {
             Regex("""\(([^)]+)\)""").find(item.arvlMsg2)?.groupValues?.get(1) ?: ""
         }
@@ -357,7 +365,7 @@ class ArrivalRepository(private val context: Context? = null) {
             }
         }
 
-        // 3. 파일에 없는 역 구간(예: 코레일 구간 평촌, 인덕원 등)이거나 매칭 불가 시 -> 기존 로직 + recptnDt 경과 시간 보정
+        // 3. DB에 없는 역 구간(예: 코레일 구간 평촌, 인덕원 등)이거나 매칭 불가 시 -> 기존 로직 + recptnDt 경과 시간 보정
         val barvl = item.barvlDt.toIntOrNull() ?: 0
         if (barvl > 0) return maxOf(1, barvl - elapsedSec)
 
@@ -440,17 +448,18 @@ class ArrivalRepository(private val context: Context? = null) {
     }
 
     /**
-     * 서울시 정적 시간표 API 기반으로 현재 시각 이후의 가장 가까운 열차 도착 예정 목록 계산 (다운로드 캐시 지원)
+     * 서울시 정적 시간표 API 및 내부 SQLite DB(station_static_timetables) 기반으로
+     * 현재 시각 이후의 가장 가까운 열차 도착 예정 목록 계산
      */
     private suspend fun fetchSubwayTimetableArrivals(target: TransitTarget): List<ArrivalInfo> {
         val stationCd = target.targetCode.trim()
-        if (stationCd.isEmpty()) return emptyList()
-
         val cleanTargetName = target.name.removeSuffix("역").trim()
         val weekTag = getWeekTag()
         val filter = target.directionOrRoute.trim()
         val lineName = target.subCode.ifEmpty { "지하철" }
-        val lineNum = SeoulSubwayTravelTimeManager.extractLineNumber(lineName)
+        val lineNum = SeoulSubwayTravelTimeManager.extractLineNumber(lineName) ?: lineName
+
+        if (stationCd.isEmpty() && context == null) return emptyList()
 
         val inoutTags = when {
             filter.contains("상행") || filter.contains("내선") -> listOf("1")
@@ -464,6 +473,24 @@ class ArrivalRepository(private val context: Context? = null) {
 
         for (inout in inoutTags) {
             val rows = runCatching {
+                val ctx = context
+                // 1) 먼저 내부 SQLite DB(station_static_timetables)에 저장된 역 시간표가 있는지 확인
+                if (ctx != null) {
+                    val cachedDbRows = SubwayLocalDatabase.getStationStaticTimetable(
+                        context = ctx,
+                        stationCd = stationCd,
+                        stationName = cleanTargetName,
+                        lineCode = lineNum,
+                        dayType = weekTag,
+                        inoutTag = inout
+                    )
+                    if (cachedDbRows.isNotEmpty()) {
+                        return@runCatching cachedDbRows
+                    }
+                }
+
+                // 2) 내부 DB에 없으면 서울 열린데이터광장 API 조회 후 내부 SQLite DB에 저장
+                if (stationCd.isEmpty()) return@runCatching emptyList()
                 val response = api.getSubwayTimetable(
                     apiKey = SEOUL_SUBWAY_KEY,
                     startIndex = 1,
@@ -473,22 +500,30 @@ class ArrivalRepository(private val context: Context? = null) {
                     inoutTag = inout
                 )
                 val list = response.service?.row ?: emptyList()
-                val ctx = context
                 if (list.isNotEmpty() && ctx != null) {
-                    runCatching {
-                        val cacheFile = File(ctx.cacheDir, "subway_timetable_${stationCd}_${weekTag}_${inout}.json")
-                        cacheFile.writeText(json.encodeToString(list))
-                    }
+                    SubwayLocalDatabase.saveStationStaticTimetable(
+                        context = ctx,
+                        stationCd = stationCd,
+                        stationName = cleanTargetName,
+                        lineCode = lineNum,
+                        dayType = weekTag,
+                        inoutTag = inout,
+                        items = list
+                    )
                 }
                 list
             }.getOrElse { e ->
-                Log.w("ArrivalRepo", "지하철 시간표 온라인 조회 실패, 캐시 파일 확인 ($stationCd): ${e.message}")
+                Log.w("ArrivalRepo", "지하철 시간표 조회 실패, 내부 DB 확인 ($stationCd/$cleanTargetName): ${e.message}")
                 val ctx = context
                 if (ctx != null) {
-                    val cacheFile = File(ctx.cacheDir, "subway_timetable_${stationCd}_${weekTag}_${inout}.json")
-                    if (cacheFile.exists()) {
-                        runCatching { json.decodeFromString<List<SubwayTimetableItem>>(cacheFile.readText()) }.getOrDefault(emptyList())
-                    } else emptyList()
+                    SubwayLocalDatabase.getStationStaticTimetable(
+                        context = ctx,
+                        stationCd = stationCd,
+                        stationName = cleanTargetName,
+                        lineCode = lineNum,
+                        dayType = weekTag,
+                        inoutTag = inout
+                    )
                 } else emptyList()
             }
 
@@ -525,7 +560,7 @@ class ArrivalRepository(private val context: Context? = null) {
                 val timeDisplay = if (diffMinutes <= 0) "곧 출발" else String.format("%02d:%02d:%02d", parts[0], parts[1], parts.getOrNull(2) ?: 0)
                 val posDetail = SeoulSubwayTravelTimeManager.estimatePositionByRemainSeconds(
                     context = context,
-                    lineNum = lineNum ?: SeoulSubwayTravelTimeManager.extractLineNumber(item.lineNum),
+                    lineNum = SeoulSubwayTravelTimeManager.extractLineNumber(lineName) ?: SeoulSubwayTravelTimeManager.extractLineNumber(item.lineNum),
                     targetStationRaw = target.name,
                     startStationRaw = item.subwaySname,
                     endStationRaw = item.subwayEname,
