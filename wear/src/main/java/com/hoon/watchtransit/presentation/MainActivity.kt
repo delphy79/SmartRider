@@ -45,6 +45,7 @@ import com.hoon.watchtransit.network.ArrivalRepository
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.time.LocalTime
 
 
 /**
@@ -154,10 +155,22 @@ fun WatchAppScreen(storage: TransitWatchStorage, repository: ArrivalRepository) 
         }
     }
 
-    // 위치 획득 시 목록 중 가장 가까운 정류장/역으로 자동 스크롤
+    // 위치 획득 시 목록 중 가까운 정류장/역으로 자동 스크롤
+    // 현재 시간이 오후 12시 이전(00:00~11:59)이면 1번째 가까운 곳, 오후 12시 이후(12:00~23:59)이면 2번째 가까운 곳 선택 (동일 역 출퇴근 노선 구분)
     val closestIndex = remember(userLocation, targets) {
-        if (userLocation == null || targets.isEmpty()) null
-        else targets.indices.minByOrNull { idx -> getDistanceMeters(userLocation, targets[idx]) ?: Float.MAX_VALUE }
+        if (userLocation == null || targets.isEmpty()) {
+            null
+        } else {
+            val sortedIndices = targets.indices.sortedBy { idx ->
+                getDistanceMeters(userLocation, targets[idx]) ?: Float.MAX_VALUE
+            }
+            val isBeforeNoon = LocalTime.now().hour < 12
+            if (isBeforeNoon) {
+                sortedIndices.firstOrNull()
+            } else {
+                if (sortedIndices.size >= 2) sortedIndices[1] else sortedIndices.firstOrNull()
+            }
+        }
     }
 
     LaunchedEffect(closestIndex) {
