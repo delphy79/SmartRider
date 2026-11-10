@@ -19,7 +19,9 @@ import retrofit2.http.Path
 import retrofit2.http.Query
 import java.io.File
 import java.time.DayOfWeek
+import java.time.Duration
 import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
@@ -327,12 +329,15 @@ class ArrivalRepository(private val context: Context? = null) {
     /**
      * 실시간 열차의 도착 예정 시간(초)을 정밀 계산하여 도착 순서대로 정렬하기 위한 헬퍼
      * 서울교통공사·인천교통공사·공항철도 역간 소요시간 파일에 존재하는 구간은 파일 데이터를 우선 적용하고,
-     * 파일에 없는 역 구간(코레일 평촌, 인덕원 등)은 기존 알고리즘(160초 배수 등)을 그대로 유지
+     * 파일에 없는 역 구간(코레일 평촌, 인덕원 등)은 기존 알고리즘(160초 배수 등)을 그대로 유지하며,
+     * 실시간 도착정보 생성시각(recptnDt)과 현재 시각의 경과 시간(초)을 차감하여 보정
      */
     private fun calculateEstimatedArrivalSeconds(item: SubwayRealtimeItem, targetStationName: String): Int {
         // 1. 당역 진입/도착인 경우 즉시 초 반환
         if (item.arvlCd == "0" || item.arvlMsg2.contains("당역 진입")) return 10  // 당역 진입
         if (item.arvlCd == "1" || item.arvlMsg2.contains("당역 도착") || item.arvlMsg2.contains("곧 도착")) return 15  // 당역 도착
+
+        val elapsedSec = getElapsedSecondsFromRecptnDt(item.recptnDt)
 
         // 2. 역간 소요시간 파일 데이터 적용 시도 (서울1~8호선, 인천1·2호선, 공항철도)
         val currentStation = item.arvlMsg3.ifBlank {
@@ -347,13 +352,14 @@ class ArrivalRepository(private val context: Context? = null) {
                 toStationRaw = targetStationName
             )
             if (travelSec != null) {
-                return if (travelSec == 0) 15 else travelSec
+                if (travelSec == 0) return 15
+                return maxOf(1, travelSec - elapsedSec)
             }
         }
 
-        // 3. 파일에 없는 역 구간(예: 코레일 구간 평촌, 인덕원 등)이거나 매칭 불가 시 -> 기존 로직 100% 유지!
+        // 3. 파일에 없는 역 구간(예: 코레일 구간 평촌, 인덕원 등)이거나 매칭 불가 시 -> 기존 로직 + recptnDt 경과 시간 보정
         val barvl = item.barvlDt.toIntOrNull() ?: 0
-        if (barvl > 0) return barvl
+        if (barvl > 0) return maxOf(1, barvl - elapsedSec)
 
         val msg = item.arvlMsg2
         val minMatch = Regex("""(\d+)\s*분""").find(msg)
@@ -361,10 +367,10 @@ class ArrivalRepository(private val context: Context? = null) {
         if (minMatch != null) {
             val min = minMatch.groupValues[1].toIntOrNull() ?: 0
             val sec = secMatch?.groupValues?.get(1)?.toIntOrNull() ?: 0
-            return min * 60 + sec
+            return maxOf(1, min * 60 + sec - elapsedSec)
         }
 
-        return when (item.arvlCd) {
+        val baseSec = when (item.arvlCd) {
             "4" -> 90  // 전역 진입
             "5" -> 110 // 전역 도착
             "3" -> 160 // 전역 출발
@@ -384,6 +390,27 @@ class ArrivalRepository(private val context: Context? = null) {
                 }
             }
         }
+        return maxOf(1, baseSec - elapsedSec)
+    }
+
+    /**
+     * 실시간 도착정보 생성시각(recptnDt, 예: "2026-11-10 09:05:12")과 현재 시각의 경과 시간(초)을 계산
+     */
+    private fun getElapsedSecondsFromRecptnDt(recptnDt: String): Int {
+        if (recptnDt.isBlank()) return 0
+        return runCatching {
+            val cleaned = recptnDt.trim().substringBefore(".")
+            val fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+            val recptnDateTime = LocalDateTime.parse(cleaned, fmt)
+            val nowDateTime = LocalDateTime.now()
+            val diffSec = Duration.between(recptnDateTime, nowDateTime).seconds
+            if (diffSec in 0..600) {
+                diffSec.toInt()
+            } else {
+                val timeDiff = nowDateTime.toLocalTime().toSecondOfDay() - recptnDateTime.toLocalTime().toSecondOfDay()
+                if (timeDiff in 0..600) timeDiff else 0
+            }
+        }.getOrDefault(0)
     }
 
     private fun getSubwayIdFromLineName(subCode: String): String {
