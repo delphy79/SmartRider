@@ -36,25 +36,21 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import java.time.LocalTime
+import kotlin.coroutines.resume
 
 /**
  * Wear OS 스마트라이더 실시간 도착 정보 타일 서비스
- * - 현재 위치에서 가장 가까운 역부터 순서대로 자동 정렬 및 표시
+ * - 타일 실행/진입 시 무조건 현재 위치에서 가장 가까운 역부터 표시 (이전 선택 기억 초기화)
  * - 5초 단위 타임라인 자동 전진으로 시간이 멈추지 않고 흘러가도록 구현
  * - 38sp 대형 타이포그래피로 화면 가득 시원한 도착 시간 표시
  * - ◀ / ▶ 버튼으로 1번째 가까운 역 -> 2번째 가까운 역 등으로 순회 가능
  */
 class TransitTileService : TileService() {
     private val serviceScope = CoroutineScope(Dispatchers.IO)
-    private val RESOURCES_VERSION = "3"
-
-    companion object {
-        @Volatile
-        private var lastManualIndex: Int? = null
-        @Volatile
-        private var lastManualTimeMs: Long = 0L
-    }
+    private val RESOURCES_VERSION = "4"
 
     override fun onTileResourcesRequest(requestParams: RequestBuilders.ResourcesRequest): ListenableFuture<ResourceBuilders.Resources> {
         return Futures.immediateFuture(
@@ -67,22 +63,13 @@ class TransitTileService : TileService() {
     override fun onTileRequest(requestParams: RequestBuilders.TileRequest): ListenableFuture<TileBuilders.Tile> {
         val lastClickableId = requestParams.currentState?.lastClickableId
 
-        // 사용자가 타일 상의 ◀ 또는 ▶ 버튼을 탭하여 특정 역으로 이동을 요청한 경우 처리
-        if (lastClickableId != null && lastClickableId.startsWith("nav_goto_")) {
-            val targetIdx = lastClickableId.removePrefix("nav_goto_").toIntOrNull()
-            if (targetIdx != null) {
-                lastManualIndex = targetIdx
-                lastManualTimeMs = System.currentTimeMillis()
-            }
-        }
-
-        // 백그라운드 GPS 위치 1회 갱신 트리거 (다음 타일 갱신 시 최신 위치 반영)
+        // 백그라운드 GPS 위치 1회 갱신 트리거
         triggerLocationUpdate()
 
         return CallbackToFutureAdapter.getFuture { completer ->
             serviceScope.launch {
                 try {
-                    val tile = buildTile()
+                    val tile = buildTile(lastClickableId)
                     completer.set(tile)
                 } catch (e: Exception) {
                     completer.setException(e)
@@ -92,7 +79,7 @@ class TransitTileService : TileService() {
         }
     }
 
-    private suspend fun buildTile(): TileBuilders.Tile {
+    private suspend fun buildTile(lastClickableId: String?): TileBuilders.Tile {
         val storage = TransitWatchStorage(this)
         val rawTargets = storage.savedTargetsFlow.first()
 
@@ -113,21 +100,20 @@ class TransitTileService : TileService() {
                 .build()
         }
 
-        // 1. 현재 사용자 위치 획득 (GPS / Network / SharedPreferences 캐시 종합)
-        val userLocation = getUserLocation(this@TransitTileService)
+        // 1. 현재 사용자 위치 획득 (캐시 및 필요 시 빠른 단일 조회)
+        val userLocation = getOrFetchUserLocation()
 
         // 2. 현재 위치랑 가까운 곳부터 순서대로 목록 정렬!
         val sortedTargets = sortTargetsByProximity(rawTargets, userLocation)
         val totalCount = sortedTargets.size
 
-        // 3. 수동으로 ◀ / ▶ 조작한 경우 3분간 유지, 그 외에는 0번(가장 가까운 곳)부터 표시!
-        val isManualActive = lastManualIndex != null &&
-                (System.currentTimeMillis() - lastManualTimeMs < 180_000L)
-
-        val currentIndex = if (isManualActive && lastManualIndex != null) {
-            ((lastManualIndex!! % totalCount) + totalCount) % totalCount
+        // 3. 타일이 새로 실행되거나 열릴 때는 무조건 0번(가장 가까운 곳)부터 표시!
+        // 사용자가 명시적으로 ◀ / ▶ 버튼을 터치한 경우에만 해당 인덱스로 즉각 전환
+        val currentIndex = if (!lastClickableId.isNullOrEmpty() && lastClickableId.startsWith("nav_goto_")) {
+            val reqIdx = lastClickableId.removePrefix("nav_goto_").toIntOrNull() ?: 0
+            ((reqIdx % totalCount) + totalCount) % totalCount
         } else {
-            0 // 현재 위치에서 가장 가까운 역이 0번 인덱스
+            0 // 타일 실행/새로고침 시 무조건 현재 위치에서 가장 가까운 역!
         }
 
         val (target, distanceMeters) = sortedTargets[currentIndex]
@@ -359,7 +345,7 @@ class TransitTileService : TileService() {
         val badge = if (target.type == TransitType.SUBWAY) "지하철" else "버스"
         val isImminent = arrivalTime.contains("곧") || (arrivalTime.contains("초") && !arrivalTime.contains("분"))
 
-        // 1. 역명 헤더 + 거리 표시 (17sp 볼드, 옐로우 골드)
+        // 1. 역명 헤더 + 거리 표시 (16sp 볼드, 옐로우 골드)
         val headerTitle = "[$badge] ${target.name}$distText"
         val header = Text.Builder()
             .setText(headerTitle)
@@ -587,6 +573,47 @@ class TransitTileService : TileService() {
             .setVerticalAlignment(LayoutElementBuilders.VERTICAL_ALIGN_CENTER)
             .addContent(column)
             .build()
+    }
+
+    @SuppressLint("MissingPermission")
+    private suspend fun getOrFetchUserLocation(): Location? {
+        val cached = getUserLocation(this@TransitTileService)
+        if (cached != null) return cached
+
+        return withTimeoutOrNull(800L) {
+            suspendCancellableCoroutine { cont ->
+                val lm = getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+                if (lm == null) {
+                    cont.resume(null)
+                    return@suspendCancellableCoroutine
+                }
+                val listener = object : LocationListener {
+                    override fun onLocationChanged(loc: Location) {
+                        TransitLocationCache.saveLocation(this@TransitTileService, loc)
+                        if (cont.isActive) cont.resume(loc)
+                        runCatching { lm.removeUpdates(this) }
+                    }
+                    override fun onProviderDisabled(provider: String) {
+                        if (cont.isActive) cont.resume(null)
+                    }
+                }
+                val provider = if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+                    LocationManager.NETWORK_PROVIDER
+                } else if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+                    LocationManager.GPS_PROVIDER
+                } else {
+                    LocationManager.PASSIVE_PROVIDER
+                }
+                runCatching {
+                    lm.requestSingleUpdate(provider, listener, mainLooper)
+                }.onFailure {
+                    if (cont.isActive) cont.resume(null)
+                }
+                cont.invokeOnCancellation {
+                    runCatching { lm.removeUpdates(listener) }
+                }
+            }
+        } ?: getUserLocation(this@TransitTileService)
     }
 
     @SuppressLint("MissingPermission")
