@@ -45,12 +45,12 @@ import kotlin.coroutines.resume
  * Wear OS 스마트라이더 실시간 도착 정보 타일 서비스
  * - 타일 실행/진입 시 무조건 현재 위치에서 가장 가까운 역부터 표시 (이전 선택 기억 초기화)
  * - 5초 단위 타임라인 자동 전진으로 시간이 멈추지 않고 흘러가도록 구현
- * - 38sp 대형 타이포그래피로 화면 가득 시원한 도착 시간 표시
- * - ◀ / ▶ 버튼으로 1번째 가까운 역 -> 2번째 가까운 역 등으로 순회 가능
+ * - 시간표 기반인 경우에도 남은 시간으로 환산 후 뒤에 [시간표]만 표기
+ * - user_img4.png 디자인 반영: 역명(군더더기 없이 깔끔하게), 노선/방면, 도착시간, 다음안내, ◀ N/M ▶
  */
 class TransitTileService : TileService() {
     private val serviceScope = CoroutineScope(Dispatchers.IO)
-    private val RESOURCES_VERSION = "4"
+    private val RESOURCES_VERSION = "6"
 
     override fun onTileResourcesRequest(requestParams: RequestBuilders.ResourcesRequest): ListenableFuture<ResourceBuilders.Resources> {
         return Futures.immediateFuture(
@@ -63,7 +63,7 @@ class TransitTileService : TileService() {
     override fun onTileRequest(requestParams: RequestBuilders.TileRequest): ListenableFuture<TileBuilders.Tile> {
         val lastClickableId = requestParams.currentState?.lastClickableId
 
-        // 백그라운드 GPS 위치 1회 갱신 트리거
+        // 백그라운드 GPS 위치 갱신 트리거
         triggerLocationUpdate()
 
         return CallbackToFutureAdapter.getFuture { completer ->
@@ -100,10 +100,10 @@ class TransitTileService : TileService() {
                 .build()
         }
 
-        // 1. 현재 사용자 위치 획득 (캐시 및 필요 시 빠른 단일 조회)
+        // 1. 현재 사용자 위치 획득
         val userLocation = getOrFetchUserLocation()
 
-        // 2. 현재 위치랑 가까운 곳부터 순서대로 목록 정렬!
+        // 2. 현재 위치랑 가까운 곳부터 순서대로 목록 정렬
         val sortedTargets = sortTargetsByProximity(rawTargets, userLocation)
         val totalCount = sortedTargets.size
 
@@ -113,10 +113,10 @@ class TransitTileService : TileService() {
             val reqIdx = lastClickableId.removePrefix("nav_goto_").toIntOrNull() ?: 0
             ((reqIdx % totalCount) + totalCount) % totalCount
         } else {
-            0 // 타일 실행/새로고침 시 무조건 현재 위치에서 가장 가까운 역!
+            0
         }
 
-        val (target, distanceMeters) = sortedTargets[currentIndex]
+        val (target, _) = sortedTargets[currentIndex]
         val repository = ArrivalRepository(this)
         val arrivals = runCatching { repository.fetchArrivals(target) }.getOrDefault(emptyList())
             .sortedBy { ArrivalRepository.getEffectiveRemainSeconds(it) }
@@ -125,15 +125,11 @@ class TransitTileService : TileService() {
         val secondArrival = arrivals.getOrNull(1)
 
         val dirStr = formatDirection(target, firstArrival)
-        val distText = if (distanceMeters != null) {
-            if (distanceMeters < 1000) " · ${distanceMeters.toInt()}m" else " · ${(distanceMeters / 1000f).let { String.format("%.1fkm", it) }}"
-        } else ""
 
         // 4. 시간이 흘러가도록 5초 단위 타임라인 생성 (TileTimeline)
         val timeline = buildDynamicTimeline(
             target = target,
             direction = dirStr,
-            distText = distText,
             firstArrival = firstArrival,
             secondArrival = secondArrival,
             currentIndex = currentIndex,
@@ -148,12 +144,7 @@ class TransitTileService : TileService() {
     }
 
     /**
-     * 현재 위치를 기준으로 역 목록 정렬:
-     * 1) 현재 위치에서 가장 가까운 순서대로 정렬
-     * 2) 가장 가까운 역과 동일한 역(예: 계양역)이 복수 등록된 경우:
-     *    - 오전(12시 이전): 1번째 등록 노선 우선
-     *    - 오후(12시 이후): 2번째 등록 노선 우선
-     * 3) 그 외의 역들도 현재 위치에서 가까운 순서대로 정렬되어 배치됨 (1번째 가까운 곳 -> 2번째 가까운 곳 -> ...)
+     * 현재 위치를 기준으로 역 목록 정렬
      */
     private fun sortTargetsByProximity(
         targets: List<TransitTarget>,
@@ -190,14 +181,11 @@ class TransitTileService : TileService() {
     }
 
     /**
-     * 5초 단위 타임라인 생성:
-     * - 시스템이 5초마다 다음 타임라인 엔트리로 자동 전진하여 초/분이 실제로 흘러가도록 구현
-     * - 화면을 켜놓고 볼 때도 5초마다 카운트다운이 갱신되며, 화면을 껐다 켜도 정확한 현재 남은 시간이 표시됨
+     * 5초 단위 타임라인 생성
      */
     private fun buildDynamicTimeline(
         target: TransitTarget,
         direction: String,
-        distText: String,
         firstArrival: ArrivalInfo?,
         secondArrival: ArrivalInfo?,
         currentIndex: Int,
@@ -210,7 +198,6 @@ class TransitTileService : TileService() {
             val layout = buildMainLayout(
                 target = target,
                 direction = direction,
-                distText = distText,
                 arrivalTime = "도착 정보 없음",
                 secondArrival = "",
                 currentIndex = currentIndex,
@@ -224,14 +211,19 @@ class TransitTileService : TileService() {
             return timelineBuilder.build()
         }
 
-        val initialRemain = ArrivalRepository.getEffectiveRemainSeconds(firstArrival)
-        val secondInitialRemain = secondArrival?.let { ArrivalRepository.getEffectiveRemainSeconds(it) }
+        val initialRemain = if (firstArrival.remainSeconds > 0) {
+            firstArrival.remainSeconds
+        } else {
+            getTimetableRemainSeconds(firstArrival.arrivalTime) ?: ArrivalRepository.getEffectiveRemainSeconds(firstArrival)
+        }
 
-        // 5초 단위로 최대 5분(60개 엔트리) 생성
+        val secondInitialRemain = secondArrival?.let {
+            if (it.remainSeconds > 0) it.remainSeconds else (getTimetableRemainSeconds(it.arrivalTime) ?: ArrivalRepository.getEffectiveRemainSeconds(it))
+        }
+
         val stepSeconds = 5
         val maxSteps = 60
 
-        // 남은 시간 + 15초(도착 완료 표시)까지 타임라인 생성
         val steps = if (initialRemain in 1..300) {
             ((initialRemain + 15) / stepSeconds).coerceIn(1, maxSteps)
         } else {
@@ -254,7 +246,6 @@ class TransitTileService : TileService() {
             val layout = buildMainLayout(
                 target = target,
                 direction = direction,
-                distText = distText,
                 arrivalTime = arrivalTimeStr,
                 secondArrival = secondTimeStr,
                 currentIndex = currentIndex,
@@ -277,48 +268,79 @@ class TransitTileService : TileService() {
         return timelineBuilder.build()
     }
 
+    private fun getTimetableRemainSeconds(rawTimeStr: String): Int? {
+        val clean = rawTimeStr.trim()
+        val match = Regex("""(\d{1,2}):(\d{2})(?::(\d{2}))?""").find(clean) ?: return null
+        val h = match.groupValues[1].toIntOrNull() ?: return null
+        val m = match.groupValues[2].toIntOrNull() ?: return null
+        val s = match.groupValues.getOrNull(3)?.toIntOrNull() ?: 0
+
+        val now = LocalTime.now()
+        var diffSec = (h * 3600 + m * 60 + s) - (now.hour * 3600 + now.minute * 60 + now.second)
+        if (diffSec < -60) {
+            diffSec += 86400
+        }
+        return if (diffSec >= 0) diffSec else 0
+    }
+
     private fun formatRemainSecondsForTile(remainSeconds: Int, originalArrivalTime: String): String {
+        val isTimetable = originalArrivalTime.contains("시간표") || Regex("""\d{1,2}:\d{2}""").containsMatchIn(originalArrivalTime)
+        val suffix = if (isTimetable) " [시간표]" else ""
+
         return when {
-            remainSeconds <= 0 -> {
-                if (originalArrivalTime.isNotEmpty()) originalArrivalTime else "곧 도착"
-            }
-            remainSeconds < 30 -> "곧 도착"
-            remainSeconds in 30..59 -> "${remainSeconds}초"
+            remainSeconds <= 30 -> "곧 도착$suffix"
+            remainSeconds in 31..59 -> "${remainSeconds}초$suffix"
             remainSeconds >= 60 -> {
                 val m = remainSeconds / 60
                 val s = remainSeconds % 60
-                if (s == 0) "${m}분" else "${m}분 ${s}초"
+                val tStr = if (s == 0) "${m}분" else "${m}분 ${s}초"
+                "$tStr$suffix"
             }
-            originalArrivalTime.isNotEmpty() -> originalArrivalTime
+            originalArrivalTime.isNotEmpty() -> {
+                val clean = originalArrivalTime.removeSuffix(" [시간표]").removeSuffix(" 후").trim()
+                if (clean.isNotEmpty()) "$clean$suffix" else "운행 종료"
+            }
             else -> "운행 종료"
         }
     }
 
     private fun formatDirection(target: TransitTarget, arrival: ArrivalInfo?): String {
-        if (arrival != null && arrival.destination.isNotEmpty()) {
-            val dest = arrival.destination
-            val line = arrival.lineOrBusName.ifEmpty { target.subCode }
-            return if (line.isNotEmpty() && !dest.contains(line)) "$line · $dest" else dest
-        }
-        val dir = target.directionOrRoute.trim()
-        return if (dir.isNotEmpty() && dir != "ALL" && !dir.contains("|")) {
-            "${target.subCode} · $dir"
+        if (target.type == TransitType.SUBWAY) {
+            val line = arrival?.lineOrBusName?.ifEmpty { target.subCode } ?: target.subCode
+            val dest = arrival?.destination?.ifEmpty { target.directionOrRoute } ?: target.directionOrRoute
+            return if (line.isNotEmpty() && !dest.contains(line) && dest != "ALL" && !dest.contains("|")) {
+                "$line · $dest"
+            } else if (dest != "ALL" && !dest.contains("|") && dest.isNotEmpty()) {
+                dest
+            } else {
+                line
+            }
         } else {
-            target.subCode
+            val line = arrival?.lineOrBusName?.ifEmpty {
+                target.subCode.split("|").getOrNull(1)?.ifEmpty { target.subCode } ?: target.subCode
+            } ?: target.subCode
+            val dest = arrival?.destination?.ifEmpty { target.directionOrRoute } ?: target.directionOrRoute
+            return if (line.isNotEmpty() && !dest.contains(line) && dest != "ALL" && !dest.contains("|")) {
+                "$line · $dest"
+            } else if (dest != "ALL" && !dest.contains("|") && dest.isNotEmpty()) {
+                dest
+            } else {
+                line
+            }
         }
     }
 
     /**
-     * 메인 타일 레이아웃:
-     * - 화면을 꽉 채우는 대형 폰트 구성
-     * - 첫 번째 도착 시간 38sp 대형 볼드 적용
-     * - 현재 위치로부터의 거리 표시 (예: · 120m)
-     * - 하단 이전/다음 역(◀ / ▶) 터치 네비게이션 버튼 배치
+     * 메인 타일 레이아웃 (user_img4.png 완벽 일치):
+     * 1) 역명 (예: 정부과천청사 - 군더더기 없이 중앙 배치)
+     * 2) 노선/방면 (예: 4호선 · 불암산행 - 과천방면)
+     * 3) 첫 번째 도착 예정 시간 (★ 38sp 대형 볼드 - 예: 6분 22초)
+     * 4) 다음 차량 도착 안내 (예: 다음: 16분 22초)
+     * 5) 네비게이션 컨트롤 (◀  2/8  ▶)
      */
     private fun buildMainLayout(
         target: TransitTarget,
         direction: String,
-        distText: String,
         arrivalTime: String,
         secondArrival: String,
         currentIndex: Int,
@@ -342,24 +364,22 @@ class TransitTileService : TileService() {
             )
             .build()
 
-        val badge = if (target.type == TransitType.SUBWAY) "지하철" else "버스"
         val isImminent = arrivalTime.contains("곧") || (arrivalTime.contains("초") && !arrivalTime.contains("분"))
 
-        // 1. 역명 헤더 + 거리 표시 (16sp 볼드, 옐로우 골드)
-        val headerTitle = "[$badge] ${target.name}$distText"
+        // 1. 역명 헤더 (user_img4.png: 정부과천청사 - [지하철] 및 거리 제거로 화면 넘침 방지)
         val header = Text.Builder()
-            .setText(headerTitle)
+            .setText(target.name)
             .setMaxLines(1)
             .setFontStyle(
                 LayoutElementBuilders.FontStyle.Builder()
-                    .setSize(sp(16f))
+                    .setSize(sp(17f))
                     .setWeight(LayoutElementBuilders.FONT_WEIGHT_BOLD)
                     .setColor(argb(0xFFFFD54F.toInt())) // Vibrant Warm Yellow
                     .build()
             )
             .build()
 
-        // 2. 방면/노선 서브타이틀 (13sp)
+        // 2. 방면/노선 서브타이틀 (user_img4.png: 4호선 · 불암산행 - 과천방면)
         val dir = Text.Builder()
             .setText(direction)
             .setMaxLines(1)
@@ -371,7 +391,7 @@ class TransitTileService : TileService() {
             )
             .build()
 
-        // 3. 첫 번째 도착 예정 시간 (★ 38sp 대형 볼드 - 시간이 5초마다 자동으로 흘러감)
+        // 3. 첫 번째 도착 예정 시간 (user_img4.png: 6분 22초 - 38sp 대형 볼드)
         val arrivalColor = if (isImminent) argb(0xFFFF5722.toInt()) else argb(0xFFFFFFFF.toInt())
         val arrival = Text.Builder()
             .setText(arrivalTime)
@@ -385,7 +405,7 @@ class TransitTileService : TileService() {
             )
             .build()
 
-        // 4. 다음 차량 도착 예정 안내 (12sp)
+        // 4. 다음 차량 도착 예정 안내 (user_img4.png: 다음: 16분 22초)
         val nextText = if (secondArrival.isNotEmpty()) "다음: $secondArrival" else " "
         val next = Text.Builder()
             .setText(nextText)
@@ -398,7 +418,7 @@ class TransitTileService : TileService() {
             )
             .build()
 
-        // 5. 이전/다음 역(◀ / ▶) 이동 컨트롤
+        // 5. 이전/다음 역(◀ / ▶) 이동 컨트롤 (user_img4.png: ◀ 2/8 ▶)
         val navigationRow = buildNavigationRow(currentIndex, totalCount)
 
         // 메인 컨텐츠 칼럼
@@ -450,7 +470,7 @@ class TransitTileService : TileService() {
         // ◀ 이전 역 버튼
         val prevButton = buildNavButton("◀", "nav_goto_$prevIdx")
 
-        // 현재 순서 번호 (예: 1 / 3)
+        // 현재 순서 번호 (예: 2 / 8)
         val pageIndicator = Text.Builder()
             .setText("${currentIndex + 1} / $totalCount")
             .setFontStyle(

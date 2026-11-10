@@ -306,15 +306,19 @@ fun WatchAppScreen(storage: TransitWatchStorage, repository: ArrivalRepository) 
                                     }
                                 },
                                 secondaryLabel = {
-                                    val badge = if (item.type == TransitType.SUBWAY) "지하철" else "버스"
-                                    val dirText = formatDirection(item)
-                                    val sub = if (dirText.isNotEmpty() && dirText != "ALL") {
-                                        "${item.subCode} · $dirText"
+                                    val subText = if (item.type == TransitType.BUS) {
+                                        val arsId = item.targetCode.ifEmpty { item.subCode.split("|")[0].trim() }
+                                        "ARS ID: $arsId"
                                     } else {
-                                        item.subCode
+                                        val dirText = formatDirection(item)
+                                        if (dirText.isNotEmpty() && dirText != "ALL" && !dirText.contains("|")) {
+                                            "${item.subCode} · $dirText"
+                                        } else {
+                                            item.subCode
+                                        }
                                     }
                                     Text(
-                                        text = "[$badge] $sub$distText",
+                                        text = subText,
                                         fontSize = 12.sp,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
@@ -414,7 +418,7 @@ fun WatchAppScreen(storage: TransitWatchStorage, repository: ArrivalRepository) 
                         if (page < sortedArrivals.size) {
                             val arrival = sortedArrivals[page]
                             val liveTimeText = formatLiveArrivalText(arrival, secondsOffset)
-                            val numCircle = when (page) { 0 -> "①"; 1 -> "②"; 2 -> "③"; else -> "${page + 1}" }
+                            val numCircle = when (page) { 0 -> "①"; 1 -> "②"; 2 -> "③"; else -> "(${page + 1})" }
                             val (lineLabel, destLabel) = resolveLineAndDest(current, arrival)
                             val stationDisplayName = if (current.type == TransitType.SUBWAY && !current.name.endsWith("역")) {
                                 "${current.name}역"
@@ -503,10 +507,10 @@ fun WatchAppScreen(storage: TransitWatchStorage, repository: ArrivalRepository) 
                                             text = liveTimeText,
                                             fontSize = timeFontSize,
                                             fontWeight = FontWeight.Black,
-                                            color = if (arrival.isSoon || isSoonByRemaining(arrival, secondsOffset) || liveTimeText == "곧 도착")
+                                            color = if (arrival.isSoon || isSoonByRemaining(arrival, secondsOffset) || liveTimeText.contains("곧"))
                                                 Color(0xFFFF5252)
                                             else
-                                                Color(0xFF69F0AE),
+                                                Color(0xFF4ADE80),
                                             textAlign = TextAlign.Center,
                                             maxLines = 1,
                                             softWrap = false,
@@ -611,69 +615,92 @@ fun WatchAppScreen(storage: TransitWatchStorage, repository: ArrivalRepository) 
  * 시간 텍스트 포맷팅:
  * 인천1호선, 인천2호선 및 버스/지하철 시간표 기준인 경우 몇분 몇초 대신 시각("HH:mm" 또는 "HH:mm:ss") 표출
  */
-private fun formatLiveArrivalText(arrival: ArrivalInfo, secondsOffset: Int): String {
-    // 1. 시간표 기반이거나 시간 형식("HH:mm", "HH:mm:ss")인 경우 몇분 몇초 대신 시간(시각) 표출
-    val timeMatch = extractTime(arrival.arrivalTime)
-    if (arrival.lineOrBusName.contains("인천") || timeMatch != null) {
-        return timeMatch ?: arrival.arrivalTime
-    }
+private fun getTimetableRemainSeconds(rawTimeStr: String): Int? {
+    val clean = rawTimeStr.trim()
+    val match = Regex("""(\d{1,2}):(\d{2})(?::(\d{2}))?""").find(clean) ?: return null
+    val h = match.groupValues[1].toIntOrNull() ?: return null
+    val m = match.groupValues[2].toIntOrNull() ?: return null
+    val s = match.groupValues.getOrNull(3)?.toIntOrNull() ?: 0
 
-    // 2. 당역 진입/도착 또는 곧 도착 메시지인 경우 즉시 "곧 도착" 표출
-    val rawMsg = arrival.arrivalTime.trim()
-    if (rawMsg.contains("곧 도착") || rawMsg.contains("당역") || arrival.statusDetail.contains("당역")) {
-        return "곧 도착"
+    val now = LocalTime.now()
+    var diffSec = (h * 3600 + m * 60 + s) - (now.hour * 3600 + now.minute * 60 + now.second)
+    if (diffSec < -60) {
+        diffSec += 86400
     }
-
-    // 3. 일반 실시간 지하철/버스인 경우 기존 카운트다운 유지
-    if (arrival.remainSeconds <= 0) {
-        val clean = rawMsg.removeSuffix(" [시간표]").removeSuffix(" 후").trim()
-        return if (clean.contains(":")) normalizeToHhMmSs(clean) else clean.ifEmpty { "도착 정보 없음" }
-    }
-    val remaining = maxOf(0, arrival.remainSeconds - secondsOffset)
-    if (remaining <= 60) return "곧 도착"
-    val m = remaining / 60
-    val s = remaining % 60
-    return if (m > 0 && s > 0) "${m}분 ${s}초"
-    else if (m > 0) "${m}분"
-    else "${s}초"
+    return if (diffSec >= 0) diffSec else 0
 }
 
 /**
- * "12:45", "12:45:00", "7분 후 (12:45) [시간표]", "첫차 05:30 [시간표]" 등에서 시각 문자열 추출
+ * 시간 텍스트 포맷팅:
+ * - 시간표 기반이거나 시각 형식("HH:mm", "HH:mm:ss")인 경우에도 남은 시간(분/초)으로 변환 후 뒤에 "[시간표]"만 표시
+ * - 일반 실시간 도착인 경우 남은 시간 카운트다운("X분 X초", "곧 도착") 표출
  */
-private fun normalizeToHhMmSs(raw: String): String {
-    val parts = raw.trim().split(":")
-    val h = parts.getOrNull(0)?.toIntOrNull() ?: 0
-    val m = parts.getOrNull(1)?.toIntOrNull() ?: 0
-    val s = parts.getOrNull(2)?.toIntOrNull() ?: 0
-    return String.format("%02d:%02d:%02d", h, m, s)
-}
-
 private fun extractTime(text: String): String? {
     val clean = text.trim()
-    // 1. 순수 시간 형식 ("12:45", "12:45:30")
     if (clean.matches(Regex("""^\d{1,2}:\d{2}(?::\d{2})?$"""))) {
-        return normalizeToHhMmSs(clean)
+        return clean
     }
-    // 2. 괄호 속 시각 "(12:45)"
     val parenMatch = Regex("""\((\d{1,2}:\d{2}(?::\d{2})?)\)""").find(clean)
     if (parenMatch != null) {
-        return normalizeToHhMmSs(parenMatch.groupValues[1])
+        return parenMatch.groupValues[1]
     }
-    // 3. [시간표] 태그가 포함되어 있고 시각 패턴이 존재하는 경우
     if (clean.contains("시간표")) {
         val timeRegex = Regex("""(\d{1,2}:\d{2}(?::\d{2})?)""").find(clean)
         if (timeRegex != null) {
-            return normalizeToHhMmSs(timeRegex.groupValues[1])
+            return timeRegex.groupValues[1]
         }
     }
     return null
 }
 
+private fun formatLiveArrivalText(arrival: ArrivalInfo, secondsOffset: Int): String {
+    val rawMsg = arrival.arrivalTime.trim()
+    val isTimetable = rawMsg.contains("시간표") || arrival.statusDetail.contains("시간표") || extractTime(rawMsg) != null
+    val suffix = if (isTimetable) " [시간표]" else ""
+
+    val baseRemain = if (arrival.remainSeconds > 0) {
+        arrival.remainSeconds
+    } else {
+        getTimetableRemainSeconds(rawMsg) ?: 0
+    }
+
+    if (baseRemain > 0) {
+        val remaining = maxOf(0, baseRemain - secondsOffset)
+        val timeStr = when {
+            remaining <= 30 || (arrival.isSoon && remaining <= 45) -> "곧 도착"
+            remaining in 31..59 -> "${remaining}초"
+            else -> {
+                val m = remaining / 60
+                val s = remaining % 60
+                if (s == 0) "${m}분" else "${m}분 ${s}초"
+            }
+        }
+        return "$timeStr$suffix"
+    }
+
+    if (rawMsg.contains("곧 도착") || rawMsg.contains("당역") || arrival.isSoon) {
+        return "곧 도착$suffix"
+    }
+
+    if (rawMsg.contains("종료")) return "운행 종료"
+
+    val minMatch = Regex("""(\d+)\s*분""").find(rawMsg)
+    val secMatch = Regex("""(\d+)\s*초""").find(rawMsg)
+    if (minMatch != null) {
+        val m = minMatch.groupValues[1].toIntOrNull() ?: 0
+        val s = secMatch?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        val timeStr = if (s == 0) "${m}분" else "${m}분 ${s}초"
+        return "$timeStr$suffix"
+    }
+
+    val clean = rawMsg.removeSuffix(" [시간표]").removeSuffix(" 후").trim()
+    return if (clean.isNotEmpty()) "$clean$suffix" else "도착 정보 없음"
+}
+
 private fun isSoonByRemaining(arrival: ArrivalInfo, secondsOffset: Int): Boolean {
-    if (arrival.remainSeconds <= 0) return arrival.isSoon
-    val remaining = arrival.remainSeconds - secondsOffset
-    return remaining in 1..120
+    val remain = if (arrival.remainSeconds > 0) arrival.remainSeconds else (getTimetableRemainSeconds(arrival.arrivalTime) ?: 0)
+    val remaining = maxOf(0, remain - secondsOffset)
+    return remaining in 1..120 || arrival.statusDetail.contains("전역") || arrival.statusDetail.contains("진입") || arrival.statusDetail.contains("1번째")
 }
 
 /**
