@@ -61,7 +61,7 @@ class TransitConfigManager(private val context: Context) {
         }
     }
 
-    // 4. 새로운 역/정류장 목록 저장 및 워치 동기화
+    // 4. 새로운 역/정류소 목록 저장 및 워치 동기화
     suspend fun saveAndSyncTargets(targets: List<TransitTarget>): Result<Unit> {
         return runCatching {
             val jsonStr = Json.encodeToString(targets)

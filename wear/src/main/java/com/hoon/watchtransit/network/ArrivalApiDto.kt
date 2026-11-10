@@ -24,7 +24,7 @@ data class TagoBusArrivalBody(
 data class TagoBusArrivalItem(
     @SerialName("routeno") val routeNo: JsonElement? = null, // 노선번호 (숫자나 문자열 혼용 대응)
     @SerialName("arrtime") val arrTime: Int = 0,             // 남은 초(sec)
-    @SerialName("arrprevstationcnt") val arrPrevCnt: Int = 0, // 남은 정류장 수
+    @SerialName("arrprevstationcnt") val arrPrevCnt: Int = 0, // 남은 정류소 수
     @SerialName("vehicletp") val vehicleTp: String = ""      // 차량유형 (예: 저상버스, 일반차량)
 )
 

@@ -3,6 +3,7 @@ package com.hoon.watchtransit.tile
 import android.annotation.SuppressLint
 import android.content.Context
 import android.location.Location
+import android.location.LocationListener
 import android.location.LocationManager
 import androidx.concurrent.futures.CallbackToFutureAdapter
 import androidx.wear.protolayout.ActionBuilders
@@ -25,6 +26,7 @@ import androidx.wear.tiles.TileBuilders
 import androidx.wear.tiles.TileService
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import com.hoon.watchtransit.data.TransitLocationCache
 import com.hoon.watchtransit.data.TransitWatchStorage
 import com.hoon.watchtransit.model.ArrivalInfo
 import com.hoon.watchtransit.model.TransitTarget
@@ -38,13 +40,14 @@ import java.time.LocalTime
 
 /**
  * Wear OS 스마트라이더 실시간 도착 정보 타일 서비스
- * - 화면을 가득 채우는 대형 타이포그래피 (첫 번째 도착 시간 38sp 강조)
- * - 등록된 역/정류장 좌우 네비게이션 (◀ / ▶ 및 현재 페이지 인덱스 표시)
- * - 워치 메인 앱과 100% 동일한 GPS 기반 자동 역 선택 & 시간대별 분기
+ * - 현재 위치에서 가장 가까운 역부터 순서대로 자동 정렬 및 표시
+ * - 5초 단위 타임라인 자동 전진으로 시간이 멈추지 않고 흘러가도록 구현
+ * - 38sp 대형 타이포그래피로 화면 가득 시원한 도착 시간 표시
+ * - ◀ / ▶ 버튼으로 1번째 가까운 역 -> 2번째 가까운 역 등으로 순회 가능
  */
 class TransitTileService : TileService() {
     private val serviceScope = CoroutineScope(Dispatchers.IO)
-    private val RESOURCES_VERSION = "2"
+    private val RESOURCES_VERSION = "3"
 
     companion object {
         @Volatile
@@ -73,6 +76,9 @@ class TransitTileService : TileService() {
             }
         }
 
+        // 백그라운드 GPS 위치 1회 갱신 트리거 (다음 타일 갱신 시 최신 위치 반영)
+        triggerLocationUpdate()
+
         return CallbackToFutureAdapter.getFuture { completer ->
             serviceScope.launch {
                 try {
@@ -88,112 +94,216 @@ class TransitTileService : TileService() {
 
     private suspend fun buildTile(): TileBuilders.Tile {
         val storage = TransitWatchStorage(this)
-        val targets = storage.savedTargetsFlow.first()
+        val rawTargets = storage.savedTargetsFlow.first()
 
-        val rootElement = if (targets.isEmpty()) {
-            buildEmptyLayout()
+        if (rawTargets.isEmpty()) {
+            val emptyLayout = buildEmptyLayout()
+            val timeline = TimelineBuilders.Timeline.Builder()
+                .addTimelineEntry(
+                    TimelineBuilders.TimelineEntry.Builder()
+                        .setLayout(Layout.Builder().setRoot(emptyLayout).build())
+                        .build()
+                )
+                .build()
+
+            return TileBuilders.Tile.Builder()
+                .setResourcesVersion(RESOURCES_VERSION)
+                .setTileTimeline(timeline)
+                .setFreshnessIntervalMillis(15_000L)
+                .build()
+        }
+
+        // 1. 현재 사용자 위치 획득 (GPS / Network / SharedPreferences 캐시 종합)
+        val userLocation = getUserLocation(this@TransitTileService)
+
+        // 2. 현재 위치랑 가까운 곳부터 순서대로 목록 정렬!
+        val sortedTargets = sortTargetsByProximity(rawTargets, userLocation)
+        val totalCount = sortedTargets.size
+
+        // 3. 수동으로 ◀ / ▶ 조작한 경우 3분간 유지, 그 외에는 0번(가장 가까운 곳)부터 표시!
+        val isManualActive = lastManualIndex != null &&
+                (System.currentTimeMillis() - lastManualTimeMs < 180_000L)
+
+        val currentIndex = if (isManualActive && lastManualIndex != null) {
+            ((lastManualIndex!! % totalCount) + totalCount) % totalCount
         } else {
-            val totalCount = targets.size
-            val defaultIndex = calculateDefaultTargetIndex(targets)
+            0 // 현재 위치에서 가장 가까운 역이 0번 인덱스
+        }
 
-            // 수동으로 이전/다음 역을 선택한 경우 3분간 해당 역 유지, 이후 또는 초기에는 GPS 최적 역 표시
-            val isManualActive = lastManualIndex != null &&
-                    (System.currentTimeMillis() - lastManualTimeMs < 180_000L)
+        val (target, distanceMeters) = sortedTargets[currentIndex]
+        val repository = ArrivalRepository(this)
+        val arrivals = runCatching { repository.fetchArrivals(target) }.getOrDefault(emptyList())
+            .sortedBy { ArrivalRepository.getEffectiveRemainSeconds(it) }
 
-            val currentIndex = if (isManualActive && lastManualIndex != null) {
-                ((lastManualIndex!! % totalCount) + totalCount) % totalCount
-            } else {
-                defaultIndex
-            }
+        val firstArrival = arrivals.firstOrNull()
+        val secondArrival = arrivals.getOrNull(1)
 
-            val target = targets[currentIndex]
-            val repository = ArrivalRepository(this)
-            val arrivals = runCatching { repository.fetchArrivals(target) }.getOrDefault(emptyList())
-                .sortedBy { ArrivalRepository.getEffectiveRemainSeconds(it) }
+        val dirStr = formatDirection(target, firstArrival)
+        val distText = if (distanceMeters != null) {
+            if (distanceMeters < 1000) " · ${distanceMeters.toInt()}m" else " · ${(distanceMeters / 1000f).let { String.format("%.1fkm", it) }}"
+        } else ""
 
-            val firstArrival = arrivals.firstOrNull()
-            val secondArrival = arrivals.getOrNull(1)
+        // 4. 시간이 흘러가도록 5초 단위 타임라인 생성 (TileTimeline)
+        val timeline = buildDynamicTimeline(
+            target = target,
+            direction = dirStr,
+            distText = distText,
+            firstArrival = firstArrival,
+            secondArrival = secondArrival,
+            currentIndex = currentIndex,
+            totalCount = totalCount
+        )
 
-            val arrivalTimeStr = firstArrival?.let { formatArrivalForTile(it) } ?: "도착 정보 없음"
-            val secondTimeStr = secondArrival?.let { formatArrivalForTile(it) } ?: ""
-            val dirStr = formatDirection(target, firstArrival)
+        return TileBuilders.Tile.Builder()
+            .setResourcesVersion(RESOURCES_VERSION)
+            .setTileTimeline(timeline)
+            .setFreshnessIntervalMillis(15_000L) // 15초마다 새 실시간 API 정보로 갱신
+            .build()
+    }
 
-            buildMainLayout(
+    /**
+     * 현재 위치를 기준으로 역 목록 정렬:
+     * 1) 현재 위치에서 가장 가까운 순서대로 정렬
+     * 2) 가장 가까운 역과 동일한 역(예: 계양역)이 복수 등록된 경우:
+     *    - 오전(12시 이전): 1번째 등록 노선 우선
+     *    - 오후(12시 이후): 2번째 등록 노선 우선
+     * 3) 그 외의 역들도 현재 위치에서 가까운 순서대로 정렬되어 배치됨 (1번째 가까운 곳 -> 2번째 가까운 곳 -> ...)
+     */
+    private fun sortTargetsByProximity(
+        targets: List<TransitTarget>,
+        userLocation: Location?
+    ): List<Pair<TransitTarget, Float?>> {
+        if (targets.isEmpty()) return emptyList()
+        if (userLocation == null) {
+            return targets.map { it to null }
+        }
+
+        val withDistance = targets.map { target ->
+            target to getDistanceMeters(userLocation, target)
+        }
+
+        val sortedByDist = withDistance.sortedBy { it.second ?: Float.MAX_VALUE }
+        val closest = sortedByDist.firstOrNull() ?: return withDistance
+
+        val closestBaseName = closest.first.name.split("(")[0].removeSuffix("역").trim()
+        val sameStationList = sortedByDist.filter {
+            it.first.name.split("(")[0].removeSuffix("역").trim() == closestBaseName
+        }
+        val otherStationsList = sortedByDist.filter {
+            it.first.name.split("(")[0].removeSuffix("역").trim() != closestBaseName
+        }
+
+        val isBeforeNoon = LocalTime.now().hour < 12
+        val primaryStation = if (sameStationList.size >= 2) {
+            if (isBeforeNoon) sameStationList else listOf(sameStationList[1], sameStationList[0]) + sameStationList.drop(2)
+        } else {
+            sameStationList
+        }
+
+        return primaryStation + otherStationsList
+    }
+
+    /**
+     * 5초 단위 타임라인 생성:
+     * - 시스템이 5초마다 다음 타임라인 엔트리로 자동 전진하여 초/분이 실제로 흘러가도록 구현
+     * - 화면을 켜놓고 볼 때도 5초마다 카운트다운이 갱신되며, 화면을 껐다 켜도 정확한 현재 남은 시간이 표시됨
+     */
+    private fun buildDynamicTimeline(
+        target: TransitTarget,
+        direction: String,
+        distText: String,
+        firstArrival: ArrivalInfo?,
+        secondArrival: ArrivalInfo?,
+        currentIndex: Int,
+        totalCount: Int
+    ): TimelineBuilders.Timeline {
+        val timelineBuilder = TimelineBuilders.Timeline.Builder()
+        val nowMs = System.currentTimeMillis()
+
+        if (firstArrival == null) {
+            val layout = buildMainLayout(
                 target = target,
-                direction = dirStr,
+                direction = direction,
+                distText = distText,
+                arrivalTime = "도착 정보 없음",
+                secondArrival = "",
+                currentIndex = currentIndex,
+                totalCount = totalCount
+            )
+            timelineBuilder.addTimelineEntry(
+                TimelineBuilders.TimelineEntry.Builder()
+                    .setLayout(Layout.Builder().setRoot(layout).build())
+                    .build()
+            )
+            return timelineBuilder.build()
+        }
+
+        val initialRemain = ArrivalRepository.getEffectiveRemainSeconds(firstArrival)
+        val secondInitialRemain = secondArrival?.let { ArrivalRepository.getEffectiveRemainSeconds(it) }
+
+        // 5초 단위로 최대 5분(60개 엔트리) 생성
+        val stepSeconds = 5
+        val maxSteps = 60
+
+        // 남은 시간 + 15초(도착 완료 표시)까지 타임라인 생성
+        val steps = if (initialRemain in 1..300) {
+            ((initialRemain + 15) / stepSeconds).coerceIn(1, maxSteps)
+        } else {
+            maxSteps
+        }
+
+        for (step in 0 until steps) {
+            val elapsedSec = step * stepSeconds
+            val entryStartMs = nowMs + elapsedSec * 1000L
+            val entryEndMs = entryStartMs + stepSeconds * 1000L
+
+            val curRemain = (initialRemain - elapsedSec).coerceAtLeast(0)
+            val arrivalTimeStr = formatRemainSecondsForTile(curRemain, firstArrival.arrivalTime)
+
+            val curSecondRemain = secondInitialRemain?.let { (it - elapsedSec).coerceAtLeast(0) }
+            val secondTimeStr = if (curSecondRemain != null && curSecondRemain > 0) {
+                formatRemainSecondsForTile(curSecondRemain, secondArrival.arrivalTime)
+            } else ""
+
+            val layout = buildMainLayout(
+                target = target,
+                direction = direction,
+                distText = distText,
                 arrivalTime = arrivalTimeStr,
                 secondArrival = secondTimeStr,
                 currentIndex = currentIndex,
                 totalCount = totalCount
             )
-        }
 
-        val timeline = TimelineBuilders.Timeline.Builder()
-            .addTimelineEntry(
+            timelineBuilder.addTimelineEntry(
                 TimelineBuilders.TimelineEntry.Builder()
-                    .setLayout(Layout.Builder().setRoot(rootElement).build())
+                    .setValidity(
+                        TimelineBuilders.TimeInterval.Builder()
+                            .setStartMillis(entryStartMs)
+                            .setEndMillis(entryEndMs)
+                            .build()
+                    )
+                    .setLayout(Layout.Builder().setRoot(layout).build())
                     .build()
             )
-            .build()
-
-        return TileBuilders.Tile.Builder()
-            .setResourcesVersion(RESOURCES_VERSION)
-            .setTileTimeline(timeline)
-            .setFreshnessIntervalMillis(15_000L) // 15초 주기 갱신
-            .build()
-    }
-
-    /**
-     * 워치 메인 앱과 동일한 위치 기반 가장 가까운 역 선택 로직:
-     * 1) GPS/네트워크 위치 기반으로 가장 가까운 역 자동 탐색
-     * 2) 가장 가까운 역과 동일한 역(예: 계양역)이 여러 개 등록된 경우에만 시간대별(오전 1번 / 오후 2번) 분기
-     */
-    private fun calculateDefaultTargetIndex(targets: List<TransitTarget>): Int {
-        val userLocation = getUserLocation(this@TransitTileService)
-        val isBeforeNoon = LocalTime.now().hour < 12
-
-        return if (userLocation != null) {
-            val sortedIndices = targets.indices.sortedBy { idx ->
-                getDistanceMeters(userLocation, targets[idx]) ?: Float.MAX_VALUE
-            }
-            val bestIdx = sortedIndices.firstOrNull() ?: 0
-            val bestTarget = targets[bestIdx]
-            val bestBaseName = bestTarget.name.split("(")[0].removeSuffix("역").trim()
-
-            val sameStationIndices = targets.indices.filter { idx ->
-                val baseName = targets[idx].name.split("(")[0].removeSuffix("역").trim()
-                baseName == bestBaseName
-            }
-
-            if (sameStationIndices.size >= 2) {
-                if (isBeforeNoon) sameStationIndices[0] else sameStationIndices[1]
-            } else {
-                bestIdx
-            }
-        } else {
-            val firstTarget = targets.first()
-            val firstBaseName = firstTarget.name.split("(")[0].removeSuffix("역").trim()
-            val sameStationIndices = targets.indices.filter { idx ->
-                targets[idx].name.split("(")[0].removeSuffix("역").trim() == firstBaseName
-            }
-            if (sameStationIndices.size >= 2) {
-                if (isBeforeNoon) sameStationIndices[0] else sameStationIndices[1]
-            } else {
-                0
-            }
         }
+
+        return timelineBuilder.build()
     }
 
-    private fun formatArrivalForTile(arrival: ArrivalInfo): String {
+    private fun formatRemainSecondsForTile(remainSeconds: Int, originalArrivalTime: String): String {
         return when {
-            arrival.isSoon -> "곧 도착"
-            arrival.remainSeconds in 1..59 -> "${arrival.remainSeconds}초"
-            arrival.remainSeconds >= 60 -> {
-                val m = arrival.remainSeconds / 60
-                val s = arrival.remainSeconds % 60
+            remainSeconds <= 0 -> {
+                if (originalArrivalTime.isNotEmpty()) originalArrivalTime else "곧 도착"
+            }
+            remainSeconds < 30 -> "곧 도착"
+            remainSeconds in 30..59 -> "${remainSeconds}초"
+            remainSeconds >= 60 -> {
+                val m = remainSeconds / 60
+                val s = remainSeconds % 60
                 if (s == 0) "${m}분" else "${m}분 ${s}초"
             }
-            arrival.arrivalTime.isNotEmpty() -> arrival.arrivalTime
+            originalArrivalTime.isNotEmpty() -> originalArrivalTime
             else -> "운행 종료"
         }
     }
@@ -216,11 +326,13 @@ class TransitTileService : TileService() {
      * 메인 타일 레이아웃:
      * - 화면을 꽉 채우는 대형 폰트 구성
      * - 첫 번째 도착 시간 38sp 대형 볼드 적용
+     * - 현재 위치로부터의 거리 표시 (예: · 120m)
      * - 하단 이전/다음 역(◀ / ▶) 터치 네비게이션 버튼 배치
      */
     private fun buildMainLayout(
         target: TransitTarget,
         direction: String,
+        distText: String,
         arrivalTime: String,
         secondArrival: String,
         currentIndex: Int,
@@ -247,13 +359,14 @@ class TransitTileService : TileService() {
         val badge = if (target.type == TransitType.SUBWAY) "지하철" else "버스"
         val isImminent = arrivalTime.contains("곧") || (arrivalTime.contains("초") && !arrivalTime.contains("분"))
 
-        // 1. 역명 헤더 (17sp 볼드, 옐로우 골드)
+        // 1. 역명 헤더 + 거리 표시 (17sp 볼드, 옐로우 골드)
+        val headerTitle = "[$badge] ${target.name}$distText"
         val header = Text.Builder()
-            .setText("[$badge] ${target.name}")
+            .setText(headerTitle)
             .setMaxLines(1)
             .setFontStyle(
                 LayoutElementBuilders.FontStyle.Builder()
-                    .setSize(sp(17f))
+                    .setSize(sp(16f))
                     .setWeight(LayoutElementBuilders.FONT_WEIGHT_BOLD)
                     .setColor(argb(0xFFFFD54F.toInt())) // Vibrant Warm Yellow
                     .build()
@@ -272,7 +385,7 @@ class TransitTileService : TileService() {
             )
             .build()
 
-        // 3. 첫 번째 도착 예정 시간 (★ 38sp 대형 볼드 - 화면을 가득 채우는 하이라이트)
+        // 3. 첫 번째 도착 예정 시간 (★ 38sp 대형 볼드 - 시간이 5초마다 자동으로 흘러감)
         val arrivalColor = if (isImminent) argb(0xFFFF5722.toInt()) else argb(0xFFFFFFFF.toInt())
         val arrival = Text.Builder()
             .setText(arrivalTime)
@@ -302,7 +415,7 @@ class TransitTileService : TileService() {
         // 5. 이전/다음 역(◀ / ▶) 이동 컨트롤
         val navigationRow = buildNavigationRow(currentIndex, totalCount)
 
-        // 메인 컨텐츠 칼럼 (상단 정보 + 대형 도착 시간 + 다음 안내 + 네비게이션)
+        // 메인 컨텐츠 칼럼
         val column = Column.Builder()
             .setHorizontalAlignment(LayoutElementBuilders.HORIZONTAL_ALIGN_CENTER)
             .addContent(Spacer.Builder().setHeight(dp(6f)).build())
@@ -330,7 +443,7 @@ class TransitTileService : TileService() {
     /**
      * 좌우 목록 이동 컨트롤 바:
      * - 등록된 역이 2개 이상일 때 ◀ / ▶ 터치 버튼과 (1/N) 인덱스 표시
-     * - ◀ 클릭 시 이전 역, ▶ 클릭 시 다음 역 즉시 로드 (ActionBuilders.LoadAction)
+     * - 거리순으로 정렬된 목록을 ◀ / ▶로 자유롭게 순회
      */
     private fun buildNavigationRow(currentIndex: Int, totalCount: Int): LayoutElementBuilders.LayoutElement {
         if (totalCount <= 1) {
@@ -351,7 +464,7 @@ class TransitTileService : TileService() {
         // ◀ 이전 역 버튼
         val prevButton = buildNavButton("◀", "nav_goto_$prevIdx")
 
-        // 현재 페이지 번호 (예: 2 / 3)
+        // 현재 순서 번호 (예: 1 / 3)
         val pageIndicator = Text.Builder()
             .setText("${currentIndex + 1} / $totalCount")
             .setFontStyle(
@@ -478,11 +591,31 @@ class TransitTileService : TileService() {
 
     @SuppressLint("MissingPermission")
     private fun getUserLocation(context: Context): Location? {
-        val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return null
-        val gps = runCatching { lm.getLastKnownLocation(LocationManager.GPS_PROVIDER) }.getOrNull()
-        val net = runCatching { lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER) }.getOrNull()
-        val passive = runCatching { lm.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER) }.getOrNull()
-        return listOfNotNull(gps, net, passive).maxByOrNull { it.time }
+        val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+        val gps = runCatching { lm?.getLastKnownLocation(LocationManager.GPS_PROVIDER) }.getOrNull()
+        val net = runCatching { lm?.getLastKnownLocation(LocationManager.NETWORK_PROVIDER) }.getOrNull()
+        val passive = runCatching { lm?.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER) }.getOrNull()
+        val cached = TransitLocationCache.getCachedLocation(context)
+
+        return listOfNotNull(gps, net, passive, cached).maxByOrNull { it.time }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun triggerLocationUpdate() {
+        runCatching {
+            val lm = getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return
+            val provider = if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+                LocationManager.GPS_PROVIDER
+            } else {
+                LocationManager.NETWORK_PROVIDER
+            }
+            lm.requestSingleUpdate(provider, object : LocationListener {
+                override fun onLocationChanged(location: Location) {
+                    TransitLocationCache.saveLocation(this@TransitTileService, location)
+                    lm.removeUpdates(this)
+                }
+            }, null)
+        }
     }
 
     private fun getStationLocation(target: TransitTarget): Pair<Double, Double> {

@@ -315,7 +315,7 @@ fun TransitConfigScreen(
                             onValueChange = { searchKeyword = it },
                             placeholder = {
                                 Text(
-                                    "지하철역명 / 정류장명(번호)",
+                                    "지하철역명 / 정류소명(번호)",
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
@@ -795,7 +795,7 @@ fun TransitConfigScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        "공공데이터에 등록되지 않은 임시 정류장이나 마을버스 정류소를 직접 등록합니다.",
+                        "공공데이터에 등록되지 않은 임시 정류소이나 마을버스 정류소를 직접 등록합니다.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

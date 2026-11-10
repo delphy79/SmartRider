@@ -144,7 +144,7 @@ class TransitSearchRepository(context: Context) {
     )
 
     /**
-     * 지하철역과 선택된 도시의 버스정류장을 비동기 병렬로 동시에 검색 (통합 검색)
+     * 지하철역과 선택된 도시의 버스정류소을 비동기 병렬로 동시에 검색 (통합 검색)
      * 검색 결과 중 지하철역이 있으면 항상 최상단에 우선 표출
      */
     suspend fun searchAll(keyword: String, city: TransitCity): List<TransitTarget> = withContext(Dispatchers.IO) {
