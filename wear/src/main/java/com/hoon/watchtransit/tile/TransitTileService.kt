@@ -51,7 +51,7 @@ import kotlin.coroutines.resume
  */
 class TransitTileService : TileService() {
     private val serviceScope = CoroutineScope(Dispatchers.IO)
-    private val RESOURCES_VERSION = "8"
+    private val RESOURCES_VERSION = "9"
 
     override fun onTileResourcesRequest(requestParams: RequestBuilders.ResourcesRequest): ListenableFuture<ResourceBuilders.Resources> {
         return Futures.immediateFuture(
@@ -133,18 +133,48 @@ class TransitTileService : TileService() {
 
         val dirStr = formatDirection(target, firstArrival)
 
-        // 4. 시간이 흘러가도록 5초 단위 타임라인 생성 (TileTimeline)
-        val timeline = buildDynamicTimeline(
+        val arrivalTimeStr = if (firstArrival == null) {
+            "도착 정보 없음"
+        } else {
+            val remain = if (firstArrival.remainSeconds > 0) {
+                firstArrival.remainSeconds
+            } else {
+                getTimetableRemainSeconds(firstArrival.arrivalTime) ?: ArrivalRepository.getEffectiveRemainSeconds(firstArrival)
+            }
+            formatRemainSecondsForTile(remain, firstArrival.arrivalTime)
+        }
+
+        val secondTimeStr = if (secondArrival == null) {
+            ""
+        } else {
+            val secRemain = if (secondArrival.remainSeconds > 0) {
+                secondArrival.remainSeconds
+            } else {
+                getTimetableRemainSeconds(secondArrival.arrivalTime) ?: ArrivalRepository.getEffectiveRemainSeconds(secondArrival)
+            }
+            if (secRemain > 0) formatRemainSecondsForTile(secRemain, secondArrival.arrivalTime) else ""
+        }
+
+        // 3. 타일 단일 레이아웃 생성 (폰트 확대 및 상하 여백 최적화)
+        val layout = buildMainLayout(
             target = target,
             direction = dirStr,
-            firstArrival = firstArrival,
-            secondArrival = secondArrival,
+            arrivalTime = arrivalTimeStr,
+            secondArrival = secondTimeStr
         )
+
+        val timeline = TimelineBuilders.Timeline.Builder()
+            .addTimelineEntry(
+                TimelineBuilders.TimelineEntry.Builder()
+                    .setLayout(Layout.Builder().setRoot(layout).build())
+                    .build()
+            )
+            .build()
 
         return TileBuilders.Tile.Builder()
             .setResourcesVersion(RESOURCES_VERSION)
             .setTileTimeline(timeline)
-            .setFreshnessIntervalMillis(15_000L) // 15초마다 새 실시간 API 정보로 갱신
+            .setFreshnessIntervalMillis(0L) // 실행/진입 시점에 무조건 즉시 최신 정보로 새로고침
             .build()
     }
 
@@ -183,88 +213,6 @@ class TransitTileService : TileService() {
         }
 
         return primaryStation + otherStationsList
-    }
-
-    /**
-     * 5초 단위 타임라인 생성
-     */
-    private fun buildDynamicTimeline(
-        target: TransitTarget,
-        direction: String,
-        firstArrival: ArrivalInfo?,
-        secondArrival: ArrivalInfo?,
-    ): TimelineBuilders.Timeline {
-        val timelineBuilder = TimelineBuilders.Timeline.Builder()
-        val nowMs = System.currentTimeMillis()
-
-        if (firstArrival == null) {
-            val layout = buildMainLayout(
-                target = target,
-                direction = direction,
-                arrivalTime = "도착 정보 없음",
-                secondArrival = "",
-            )
-            timelineBuilder.addTimelineEntry(
-                TimelineBuilders.TimelineEntry.Builder()
-                    .setLayout(Layout.Builder().setRoot(layout).build())
-                    .build()
-            )
-            return timelineBuilder.build()
-        }
-
-        val initialRemain = if (firstArrival.remainSeconds > 0) {
-            firstArrival.remainSeconds
-        } else {
-            getTimetableRemainSeconds(firstArrival.arrivalTime) ?: ArrivalRepository.getEffectiveRemainSeconds(firstArrival)
-        }
-
-        val secondInitialRemain = secondArrival?.let {
-            if (it.remainSeconds > 0) it.remainSeconds else (getTimetableRemainSeconds(it.arrivalTime) ?: ArrivalRepository.getEffectiveRemainSeconds(it))
-        }
-
-        val stepSeconds = 1
-        val maxSteps = 60
-
-        val steps = if (initialRemain in 1..300) {
-            ((initialRemain + 15) / stepSeconds).coerceIn(1, maxSteps)
-        } else {
-            maxSteps
-        }
-
-        for (step in 0 until steps) {
-            val elapsedSec = step * stepSeconds
-            val entryStartMs = nowMs + elapsedSec * 1000L
-            val entryEndMs = entryStartMs + stepSeconds * 1000L
-
-            val curRemain = (initialRemain - elapsedSec).coerceAtLeast(0)
-            val arrivalTimeStr = formatRemainSecondsForTile(curRemain, firstArrival.arrivalTime)
-
-            val curSecondRemain = secondInitialRemain?.let { (it - elapsedSec).coerceAtLeast(0) }
-            val secondTimeStr = if (curSecondRemain != null && curSecondRemain > 0) {
-                formatRemainSecondsForTile(curSecondRemain, secondArrival.arrivalTime)
-            } else ""
-
-            val layout = buildMainLayout(
-                target = target,
-                direction = direction,
-                arrivalTime = arrivalTimeStr,
-                secondArrival = secondTimeStr,
-            )
-
-            timelineBuilder.addTimelineEntry(
-                TimelineBuilders.TimelineEntry.Builder()
-                    .setValidity(
-                        TimelineBuilders.TimeInterval.Builder()
-                            .setStartMillis(entryStartMs)
-                            .setEndMillis(entryEndMs)
-                            .build()
-                    )
-                    .setLayout(Layout.Builder().setRoot(layout).build())
-                    .build()
-            )
-        }
-
-        return timelineBuilder.build()
     }
 
     private fun getTimetableRemainSeconds(rawTimeStr: String): Int? {
@@ -363,42 +311,44 @@ class TransitTileService : TileService() {
 
         val isImminent = arrivalTime.contains("곧") || (arrivalTime.contains("초") && !arrivalTime.contains("분"))
 
-        // 1. 역명 헤더 (user_img4.png: 정부과천청사 - [지하철] 및 거리 제거로 화면 넘침 방지)
+        // 1. 역명 헤더 (글자 길이에 맞춰 18sp ~ 21sp로 확대)
+        val headerSp = if (target.name.length > 7) 18f else 21f
         val header = Text.Builder()
             .setText(target.name)
             .setMaxLines(1)
             .setFontStyle(
                 LayoutElementBuilders.FontStyle.Builder()
-                    .setSize(sp(17f))
+                    .setSize(sp(headerSp))
                     .setWeight(LayoutElementBuilders.FONT_WEIGHT_BOLD)
                     .setColor(argb(0xFFFFD54F.toInt())) // Vibrant Warm Yellow
                     .build()
             )
             .build()
 
-        // 2. 방면/노선 서브타이틀 (user_img4.png: 4호선 · 불암산행 - 과천방면)
+        // 2. 방면/노선 서브타이틀 (13sp -> 15sp로 확대)
         val dir = Text.Builder()
             .setText(direction)
             .setMaxLines(1)
             .setFontStyle(
                 LayoutElementBuilders.FontStyle.Builder()
-                    .setSize(sp(13f))
+                    .setSize(sp(15f))
                     .setColor(argb(0xFFCBD5E1.toInt())) // Slate Light Gray
                     .build()
             )
             .build()
 
-        // 3. 첫 번째 도착 예정 시간 (시간표 아이콘 반으로 축소 및 세로 중앙 정렬)
+        // 3. 첫 번째 도착 예정 시간 (38sp -> 42~46sp 대형 볼드로 시원하게 확대)
         val arrivalColor = if (isImminent) argb(0xFFFF5722.toInt()) else argb(0xFFFFFFFF.toInt())
         val isTimetable = arrivalTime.endsWith("🕒")
         val pureArrivalTime = if (isTimetable) arrivalTime.removeSuffix("🕒").trim() else arrivalTime
+        val arrivalSp = if (pureArrivalTime.length > 6) 40f else 46f
 
         val arrivalText = Text.Builder()
             .setText(pureArrivalTime)
             .setMaxLines(1)
             .setFontStyle(
                 LayoutElementBuilders.FontStyle.Builder()
-                    .setSize(sp(38f))
+                    .setSize(sp(arrivalSp))
                     .setWeight(LayoutElementBuilders.FONT_WEIGHT_BOLD)
                     .setColor(arrivalColor)
                     .build()
@@ -415,7 +365,7 @@ class TransitTileService : TileService() {
                         .setText("🕒")
                         .setFontStyle(
                             LayoutElementBuilders.FontStyle.Builder()
-                                .setSize(sp(18f))
+                                .setSize(sp(arrivalSp * 0.5f))
                                 .build()
                         )
                         .build()
@@ -425,33 +375,29 @@ class TransitTileService : TileService() {
             arrivalText
         }
 
-        // 4. 다음 차량 도착 예정 안내 (user_img4.png: 다음: 16분 22초)
+        // 4. 다음 차량 도착 예정 안내 (12sp -> 14sp로 확대)
         val nextText = if (secondArrival.isNotEmpty()) "다음: $secondArrival" else " "
         val next = Text.Builder()
             .setText(nextText)
             .setMaxLines(1)
             .setFontStyle(
                 LayoutElementBuilders.FontStyle.Builder()
-                    .setSize(sp(12f))
+                    .setSize(sp(14f))
                     .setColor(argb(0xFF94A3B8.toInt()))
                     .build()
             )
             .build()
 
-        // 5. 이전/다음 역(◀ / ▶) 이동 컨트롤 (user_img4.png: ◀ 2/8 ▶)
-
-        // 메인 컨텐츠 칼럼
+        // 메인 컨텐츠 칼럼 (상하 여백 및 요소 간격 정돈으로 화면을 꽉 차게)
         val column = Column.Builder()
             .setHorizontalAlignment(LayoutElementBuilders.HORIZONTAL_ALIGN_CENTER)
-            .addContent(Spacer.Builder().setHeight(dp(6f)).build())
             .addContent(header)
-            .addContent(Spacer.Builder().setHeight(dp(2f)).build())
-            .addContent(dir)
             .addContent(Spacer.Builder().setHeight(dp(4f)).build())
+            .addContent(dir)
+            .addContent(Spacer.Builder().setHeight(dp(8f)).build())
             .addContent(arrivalElement)
-            .addContent(Spacer.Builder().setHeight(dp(2f)).build())
-            .addContent(next)
             .addContent(Spacer.Builder().setHeight(dp(6f)).build())
+            .addContent(next)
             .build()
 
         return Box.Builder()
