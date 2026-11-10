@@ -2,6 +2,7 @@ package com.hoon.watchtransit.ui
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -12,23 +13,26 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import com.hoon.watchtransit.data.TransitConfigManager
 import com.hoon.watchtransit.model.TransitCity
 import com.hoon.watchtransit.model.TransitTarget
@@ -49,6 +53,7 @@ fun TransitConfigScreen(
     onSaveCityCode: ((Int) -> Unit)? = null
 ) {
     val context = LocalContext.current
+    val density = LocalDensity.current
     val repo = repository ?: remember(context) { TransitSearchRepository(context) }
     val coroutineScope = rememberCoroutineScope()
 
@@ -111,8 +116,19 @@ fun TransitConfigScreen(
     var editDirectionOrRoute by remember { mutableStateOf("") }
     var editTargetCode by remember { mutableStateOf("") }
 
-    // 편집 모드 토글 (순서 변경 및 세부 제어)
+    // 편집 모드 토글 (우측 세줄 버튼 표시, 드래그 순서 변경 및 완료 시 일괄 동기화)
     var isEditMode by remember { mutableStateOf(false) }
+    var editingTargets by remember { mutableStateOf(savedTargets) }
+
+    LaunchedEffect(savedTargets, isEditMode) {
+        if (!isEditMode) {
+            editingTargets = savedTargets
+        }
+    }
+
+    // 드래그 앤 드롭 상태 변수
+    var draggedItemId by remember { mutableStateOf<String?>(null) }
+    var dragOffsetY by remember { mutableFloatStateOf(0f) }
 
     // 신설/임시 정류소 직접 수동 추가 다이얼로그 상태
     var showManualAddDialog by remember { mutableStateOf(false) }
@@ -138,13 +154,23 @@ fun TransitConfigScreen(
         }
     }
 
-    // 순서 변경 함수 (위로 이동 / 아래로 이동)
-    fun moveTarget(fromIndex: Int, toIndex: Int) {
-        if (fromIndex !in savedTargets.indices || toIndex !in savedTargets.indices || fromIndex == toIndex) return
-        val mutable = savedTargets.toMutableList()
-        val item = mutable.removeAt(fromIndex)
-        mutable.add(toIndex, item)
-        onSaveTargets(mutable)
+    fun startEditMode() {
+        editingTargets = savedTargets
+        isEditMode = true
+    }
+
+    fun applyEditMode() {
+        onSaveTargets(editingTargets)
+        isEditMode = false
+        draggedItemId = null
+        dragOffsetY = 0f
+    }
+
+    fun cancelEditMode() {
+        editingTargets = savedTargets
+        isEditMode = false
+        draggedItemId = null
+        dragOffsetY = 0f
     }
 
     Scaffold(
@@ -153,7 +179,7 @@ fun TransitConfigScreen(
             TopAppBar(
                 title = {
                     Text(
-                        "대중교통 알림 설정",
+                        if (isEditMode) "워치 목록 순서 편집" else "대중교통 알림 설정",
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold
                     )
@@ -163,36 +189,87 @@ fun TransitConfigScreen(
                     titleContentColor = MaterialTheme.colorScheme.onSurface
                 ),
                 actions = {
-                    FilledTonalButton(
-                        onClick = {
-                            manualStopName = searchKeyword
-                            manualStopNo = if (searchKeyword.all { it.isDigit() }) searchKeyword else ""
-                            showManualAddDialog = true
-                        },
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.filledTonalButtonColors(
-                            containerColor = MaterialTheme.colorScheme.primaryContainer,
-                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                        ),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                        modifier = Modifier.padding(end = 8.dp)
-                    ) {
-                        Text(
-                            "정류소 직접입력",
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.SemiBold
-                        )
+                    if (!isEditMode) {
+                        FilledTonalButton(
+                            onClick = {
+                                manualStopName = searchKeyword
+                                manualStopNo = if (searchKeyword.all { it.isDigit() }) searchKeyword else ""
+                                showManualAddDialog = true
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                            ),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.padding(end = 8.dp)
+                        ) {
+                            Text(
+                                "정류소 직접입력",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    } else {
+                        TextButton(
+                            onClick = { cancelEditMode() },
+                            modifier = Modifier.padding(end = 4.dp)
+                        ) {
+                            Text("취소", color = MaterialTheme.colorScheme.outline)
+                        }
+                        FilledTonalButton(
+                            onClick = { applyEditMode() },
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
+                            ),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.padding(end = 8.dp)
+                        ) {
+                            Text("편집 완료", fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             )
+        },
+        bottomBar = {
+            // 편집 모드일 때 스크린샷과 동일한 하단 오렌지색 '적용하기' 버튼 표출
+            AnimatedVisibility(visible = isEditMode) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    shadowElevation = 8.dp,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Box(modifier = Modifier.padding(16.dp)) {
+                        Button(
+                            onClick = { applyEditMode() },
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFFF37A20), // 주황색 적용하기 버튼
+                                contentColor = Color.White
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(54.dp)
+                        ) {
+                            Text(
+                                "적용하기",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
         }
     ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             // 교체 모드 배너 알림
             targetToReplace?.let { replacing ->
@@ -235,280 +312,285 @@ fun TransitConfigScreen(
                 }
             }
 
-            // 1. 도시 선택 (상단 1줄)
-            ExposedDropdownMenuBox(
-                expanded = cityDropdownExpanded,
-                onExpandedChange = {
-                    cityDropdownExpanded = it
-                    if (it) cityFilterQuery = ""
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                OutlinedTextField(
-                    value = selectedCity.name,
-                    onValueChange = {},
-                    readOnly = true,
-                    singleLine = true,
-                    maxLines = 1,
-                    shape = RoundedCornerShape(14.dp),
-                    label = { Text("버스 검색 지역", maxLines = 1) },
-                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = cityDropdownExpanded) },
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .menuAnchor()
-                )
-
-                ExposedDropdownMenu(
-                    expanded = cityDropdownExpanded,
-                    onDismissRequest = { cityDropdownExpanded = false }
-                ) {
-                    OutlinedTextField(
-                        value = cityFilterQuery,
-                        onValueChange = { cityFilterQuery = it },
-                        placeholder = { Text("도시명 검색 (예: 서울, 인천, 과천)", maxLines = 1) },
-                        singleLine = true,
-                        maxLines = 1,
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
-                    )
-
-                    HorizontalDivider()
-
-                    filteredCityList.forEach { city ->
-                        DropdownMenuItem(
-                            text = { Text(city.name) },
-                            onClick = {
-                                selectedCity = city
-                                coroutineScope.launch {
-                                    configManager?.saveSelectedCityCode(city.code)
-                                }
-                                onSaveCityCode?.invoke(city.code)
-                                cityDropdownExpanded = false
-                            }
-                        )
-                    }
-
-                    if (filteredCityList.isEmpty()) {
-                        DropdownMenuItem(
-                            text = { Text("일치하는 도시가 없습니다.", color = MaterialTheme.colorScheme.outline) },
-                            onClick = {}
-                        )
-                    }
-                }
-            }
-
-            // 2. 통합 검색 입력창 (정사각형 56dp 검색 버튼 + 56dp 입력창 완벽한 수직/수평 정렬)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                OutlinedTextField(
-                    value = searchKeyword,
-                    onValueChange = { searchKeyword = it },
-                    placeholder = {
-                        Text(
-                            if (targetToReplace != null) "교체할 역명/정류장명 검색" else "지하철역명 / 정류장명(번호)",
+            // 편집 모드가 아닐 때만 도시 선택 및 검색창 표출 (편집 모드 시 목록에 집중)
+            AnimatedVisibility(visible = !isEditMode) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    // 1. 도시 선택 (상단 1줄)
+                    ExposedDropdownMenuBox(
+                        expanded = cityDropdownExpanded,
+                        onExpandedChange = {
+                            cityDropdownExpanded = it
+                            if (it) cityFilterQuery = ""
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        OutlinedTextField(
+                            value = selectedCity.name,
+                            onValueChange = {},
+                            readOnly = true,
+                            singleLine = true,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    },
-                    singleLine = true,
-                    maxLines = 1,
-                    shape = RoundedCornerShape(14.dp),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = { performSearch() }),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant
-                    ),
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(56.dp)
-                )
-                Button(
-                    onClick = { performSearch() },
-                    shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary
-                    ),
-                    contentPadding = PaddingValues(0.dp),
-                    modifier = Modifier.size(56.dp)
-                ) {
-                    Icon(
-                        Icons.Default.Search,
-                        contentDescription = "검색",
-                        modifier = Modifier.size(26.dp)
-                    )
-                }
-            }
-
-            // 3. 검색 결과
-            if (isSearching) {
-                Box(modifier = Modifier.fillMaxWidth().height(100.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                }
-            } else if (searchResults.isNotEmpty()) {
-                Text(
-                    "검색 결과 (${searchResults.size}건)",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-                LazyColumn(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    items(searchResults, key = { "${it.type}_${it.targetCode}_${it.subCode}" }) { result ->
-                        Card(
                             shape = RoundedCornerShape(14.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                            label = { Text("버스 검색 지역", maxLines = 1) },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = cityDropdownExpanded) },
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant
+                            ),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable {
-                                    pendingTarget = result
-                                    customFilterInput = ""
-                                }
+                                .menuAnchor()
+                        )
+
+                        ExposedDropdownMenu(
+                            expanded = cityDropdownExpanded,
+                            onDismissRequest = { cityDropdownExpanded = false }
                         ) {
-                            Row(
+                            OutlinedTextField(
+                                value = cityFilterQuery,
+                                onValueChange = { cityFilterQuery = it },
+                                placeholder = { Text("도시명 검색 (예: 서울, 인천, 과천)", maxLines = 1) },
+                                singleLine = true,
+                                maxLines = 1,
+                                shape = RoundedCornerShape(10.dp),
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(14.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Surface(
-                                            color = if (result.type == TransitType.SUBWAY)
-                                                MaterialTheme.colorScheme.primary
-                                            else
-                                                MaterialTheme.colorScheme.secondary,
-                                            shape = RoundedCornerShape(6.dp),
-                                            modifier = Modifier.padding(end = 8.dp)
-                                        ) {
-                                            Text(
-                                                text = if (result.type == TransitType.SUBWAY) "지하철" else "버스",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                fontWeight = FontWeight.Bold,
-                                                color = if (result.type == TransitType.SUBWAY)
-                                                    MaterialTheme.colorScheme.onPrimary
-                                                else
-                                                    MaterialTheme.colorScheme.onSecondary,
-                                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
-                                            )
+                                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                            )
+
+                            HorizontalDivider()
+
+                            filteredCityList.forEach { city ->
+                                DropdownMenuItem(
+                                    text = { Text(city.name) },
+                                    onClick = {
+                                        selectedCity = city
+                                        coroutineScope.launch {
+                                            configManager?.saveSelectedCityCode(city.code)
                                         }
-                                        Text(
-                                            "${result.name} (${result.subCode})",
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
+                                        onSaveCityCode?.invoke(city.code)
+                                        cityDropdownExpanded = false
                                     }
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        "고유코드: ${result.targetCode}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                Icon(
-                                    if (targetToReplace != null) Icons.Default.Check else Icons.Default.Add,
-                                    contentDescription = if (targetToReplace != null) "교체" else "추가",
-                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+
+                            if (filteredCityList.isEmpty()) {
+                                DropdownMenuItem(
+                                    text = { Text("일치하는 도시가 없습니다.", color = MaterialTheme.colorScheme.outline) },
+                                    onClick = {}
                                 )
                             }
                         }
                     }
-                }
-            } else if (hasSearched) {
-                Column(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        "검색 결과가 없습니다.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        "신설/임시 정류소나 마을버스는 공공데이터에 누락될 수 있습니다.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedButton(
-                        onClick = {
-                            manualStopName = searchKeyword
-                            manualStopNo = if (searchKeyword.all { it.isDigit() }) searchKeyword else ""
-                            showManualAddDialog = true
-                        },
-                        shape = RoundedCornerShape(12.dp)
+
+                    // 2. 통합 검색 입력창
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("정류소 직접 입력 추가")
+                        OutlinedTextField(
+                            value = searchKeyword,
+                            onValueChange = { searchKeyword = it },
+                            placeholder = {
+                                Text(
+                                    if (targetToReplace != null) "교체할 역명/정류장명 검색" else "지하철역명 / 정류장명(번호)",
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            },
+                            singleLine = true,
+                            maxLines = 1,
+                            shape = RoundedCornerShape(14.dp),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                            keyboardActions = KeyboardActions(onSearch = { performSearch() }),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(56.dp)
+                        )
+                        Button(
+                            onClick = { performSearch() },
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
+                            ),
+                            contentPadding = PaddingValues(0.dp),
+                            modifier = Modifier.size(56.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Search,
+                                contentDescription = "검색",
+                                modifier = Modifier.size(26.dp)
+                            )
+                        }
                     }
                 }
             }
 
-            HorizontalDivider(
-                modifier = Modifier.padding(vertical = 4.dp),
-                color = MaterialTheme.colorScheme.outlineVariant
-            )
+            // 3. 검색 결과 (편집 모드가 아닐 때만)
+            if (!isEditMode) {
+                if (isSearching) {
+                    Box(modifier = Modifier.fillMaxWidth().height(80.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                    }
+                } else if (searchResults.isNotEmpty()) {
+                    Text(
+                        "검색 결과 (${searchResults.size}건)",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    LazyColumn(
+                        modifier = Modifier.heightIn(max = 200.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        items(searchResults, key = { "${it.type}_${it.targetCode}_${it.subCode}" }) { result ->
+                            Card(
+                                shape = RoundedCornerShape(14.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        pendingTarget = result
+                                        customFilterInput = ""
+                                    }
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Surface(
+                                                color = if (result.type == TransitType.SUBWAY)
+                                                    MaterialTheme.colorScheme.primary
+                                                else
+                                                    MaterialTheme.colorScheme.secondary,
+                                                shape = RoundedCornerShape(6.dp),
+                                                modifier = Modifier.padding(end = 8.dp)
+                                            ) {
+                                                Text(
+                                                    text = if (result.type == TransitType.SUBWAY) "지하철" else "버스",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = if (result.type == TransitType.SUBWAY)
+                                                        MaterialTheme.colorScheme.onPrimary
+                                                    else
+                                                        MaterialTheme.colorScheme.onSecondary,
+                                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                                )
+                                            }
+                                            Text(
+                                                "${result.name} (${result.subCode})",
+                                                style = MaterialTheme.typography.bodyLarge,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            "고유코드: ${result.targetCode}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Icon(
+                                        if (targetToReplace != null) Icons.Default.Check else Icons.Default.Add,
+                                        contentDescription = if (targetToReplace != null) "교체" else "추가",
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                        }
+                    }
+                } else if (hasSearched) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            "검색 결과가 없습니다.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            "신설/임시 정류소나 마을버스는 공공데이터에 누락될 수 있습니다.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        OutlinedButton(
+                            onClick = {
+                                manualStopName = searchKeyword
+                                manualStopNo = if (searchKeyword.all { it.isDigit() }) searchKeyword else ""
+                                showManualAddDialog = true
+                            },
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("정류소 직접 입력 추가")
+                        }
+                    }
+                }
 
-            // 4. 워치 표시 목록 헤더 및 [1. 편집 버튼]
+                HorizontalDivider(
+                    modifier = Modifier.padding(vertical = 2.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant
+                )
+            }
+
+            // 4. 워치 표시 목록 헤더 및 [편집] 버튼
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    "워치 표시 목록 (${savedTargets.size}개)",
+                    if (isEditMode) "워치 표시 순서 (${editingTargets.size}개)"
+                    else "워치 표시 목록 (${savedTargets.size}개)",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onBackground
                 )
 
-                // 1) 편집 버튼 (편집 모드 토글: 순서 변경 / 수정 / 삭제 관리)
-                FilledTonalButton(
-                    onClick = { isEditMode = !isEditMode },
-                    shape = RoundedCornerShape(12.dp),
-                    colors = if (isEditMode) {
-                        ButtonDefaults.filledTonalButtonColors(
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary
-                        )
-                    } else {
-                        ButtonDefaults.filledTonalButtonColors(
+                if (!isEditMode) {
+                    FilledTonalButton(
+                        onClick = { startEditMode() },
+                        enabled = savedTargets.isNotEmpty(),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.filledTonalButtonColors(
                             containerColor = MaterialTheme.colorScheme.secondaryContainer,
                             contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Edit,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
                         )
-                    },
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                ) {
-                    Icon(
-                        if (isEditMode) Icons.Default.Check else Icons.Default.Edit,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        if (isEditMode) "완료" else "편집",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold
-                    )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            "편집",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
 
-            if (savedTargets.isEmpty()) {
+            val currentList = if (isEditMode) editingTargets else savedTargets
+
+            if (currentList.isEmpty()) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -526,21 +608,39 @@ fun TransitConfigScreen(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    itemsIndexed(savedTargets, key = { _, item -> item.id }) { index, item ->
+                    itemsIndexed(currentList, key = { _, item -> item.id }) { index, item ->
+                        val isDragging = isEditMode && draggedItemId == item.id
+
                         Card(
                             shape = RoundedCornerShape(14.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                            modifier = Modifier.fillMaxWidth()
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (isDragging)
+                                    MaterialTheme.colorScheme.surface
+                                else
+                                    MaterialTheme.colorScheme.surfaceVariant
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .zIndex(if (isDragging) 10f else 1f)
+                                .graphicsLayer {
+                                    translationY = if (isDragging) dragOffsetY else 0f
+                                    scaleX = if (isDragging) 1.03f else 1f
+                                    scaleY = if (isDragging) 1.03f else 1f
+                                    shadowElevation = if (isDragging) 16f else 0f
+                                }
                         ) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    .padding(horizontal = 14.dp, vertical = 12.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // 2) 리스트에 순번 표시 (1, 2, 3...)
+                                // 1. 순번 표시 (1, 2, 3...)
                                 Surface(
-                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    color = if (isDragging)
+                                        Color(0xFFF37A20)
+                                    else
+                                        MaterialTheme.colorScheme.primaryContainer,
                                     shape = CircleShape,
                                     modifier = Modifier.size(28.dp)
                                 ) {
@@ -549,19 +649,21 @@ fun TransitConfigScreen(
                                             text = "${index + 1}",
                                             style = MaterialTheme.typography.labelMedium,
                                             fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                            color = if (isDragging)
+                                                Color.White
+                                            else
+                                                MaterialTheme.colorScheme.onPrimaryContainer
                                         )
                                     }
                                 }
 
-                                Spacer(modifier = Modifier.width(10.dp))
+                                Spacer(modifier = Modifier.width(12.dp))
 
-                                // 항목 정보
+                                // 2. 항목 정보 (클릭 시 역/정류장 정보 수정 다이얼로그 호출)
                                 Column(
                                     modifier = Modifier
                                         .weight(1f)
-                                        .clickable {
-                                            // 카드 클릭 시에도 바로 수정 다이얼로그 호출
+                                        .clickable(enabled = !isEditMode) {
                                             targetBeingEdited = item
                                             editName = item.name
                                             editSubCode = item.subCode
@@ -607,64 +709,98 @@ fun TransitConfigScreen(
                                     )
                                 }
 
-                                // 3) 순서 변경 기능 (▲ 위로 / ▼ 아래로) & 4) 변경/수정 & 삭제 버튼
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    // 순서 변경 버튼 (위로)
-                                    IconButton(
-                                        onClick = { moveTarget(index, index - 1) },
-                                        enabled = index > 0,
-                                        modifier = Modifier.size(32.dp)
+                                // 3. 우측 컨트롤:
+                                // 편집 모드일 때는 [삭제/수정 버튼 대신 세줄 버튼(≡)] 표시 및 드래그 제스처로 순서 변경
+                                // 일반 모드일 때는 [수정 버튼] 및 [삭제 버튼] 표시
+                                if (isEditMode) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(44.dp)
+                                            .pointerInput(item.id) {
+                                                detectVerticalDragGestures(
+                                                    onDragStart = {
+                                                        draggedItemId = item.id
+                                                        dragOffsetY = 0f
+                                                    },
+                                                    onDragEnd = {
+                                                        draggedItemId = null
+                                                        dragOffsetY = 0f
+                                                    },
+                                                    onDragCancel = {
+                                                        draggedItemId = null
+                                                        dragOffsetY = 0f
+                                                    },
+                                                    onVerticalDrag = { change, dragAmount ->
+                                                        change.consume()
+                                                        dragOffsetY += dragAmount
+
+                                                        val currentIdx = editingTargets.indexOfFirst { it.id == draggedItemId }
+                                                        if (currentIdx != -1) {
+                                                            val itemHeightPx = with(density) { 76.dp.toPx() }
+                                                            val threshold = itemHeightPx * 0.55f
+
+                                                            if (dragOffsetY > threshold && currentIdx < editingTargets.size - 1) {
+                                                                val nextIdx = currentIdx + 1
+                                                                val list = editingTargets.toMutableList()
+                                                                val moved = list.removeAt(currentIdx)
+                                                                list.add(nextIdx, moved)
+                                                                editingTargets = list
+                                                                dragOffsetY -= itemHeightPx
+                                                            } else if (dragOffsetY < -threshold && currentIdx > 0) {
+                                                                val prevIdx = currentIdx - 1
+                                                                val list = editingTargets.toMutableList()
+                                                                val moved = list.removeAt(currentIdx)
+                                                                list.add(prevIdx, moved)
+                                                                editingTargets = list
+                                                                dragOffsetY += itemHeightPx
+                                                            }
+                                                        }
+                                                    }
+                                                )
+                                            },
+                                        contentAlignment = Alignment.Center
                                     ) {
+                                        // 사용자 스크린샷과 동일한 세줄 아이콘 (≡)
                                         Icon(
-                                            Icons.Default.KeyboardArrowUp,
-                                            contentDescription = "위로 이동",
-                                            tint = if (index > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                                            imageVector = Icons.Default.Menu,
+                                            contentDescription = "순서 이동 핸들",
+                                            tint = if (isDragging) Color(0xFFF37A20) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(24.dp)
                                         )
                                     }
+                                } else {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        // 수정 버튼
+                                        IconButton(
+                                            onClick = {
+                                                targetBeingEdited = item
+                                                editName = item.name
+                                                editSubCode = item.subCode
+                                                editDirectionOrRoute = item.directionOrRoute
+                                                editTargetCode = item.targetCode
+                                            },
+                                            modifier = Modifier.size(36.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Edit,
+                                                contentDescription = "수정/변경",
+                                                tint = MaterialTheme.colorScheme.secondary
+                                            )
+                                        }
 
-                                    // 순서 변경 버튼 (아래로)
-                                    IconButton(
-                                        onClick = { moveTarget(index, index + 1) },
-                                        enabled = index < savedTargets.size - 1,
-                                        modifier = Modifier.size(32.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Default.KeyboardArrowDown,
-                                            contentDescription = "아래로 이동",
-                                            tint = if (index < savedTargets.size - 1) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
-                                        )
-                                    }
-
-                                    // 4) 역이나 정류장을 변경할 수 있는 수정 버튼
-                                    IconButton(
-                                        onClick = {
-                                            targetBeingEdited = item
-                                            editName = item.name
-                                            editSubCode = item.subCode
-                                            editDirectionOrRoute = item.directionOrRoute
-                                            editTargetCode = item.targetCode
-                                        },
-                                        modifier = Modifier.size(32.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Edit,
-                                            contentDescription = "수정/변경",
-                                            tint = MaterialTheme.colorScheme.secondary
-                                        )
-                                    }
-
-                                    // 삭제 버튼
-                                    IconButton(
-                                        onClick = {
-                                            onSaveTargets(savedTargets.filterNot { it.id == item.id })
-                                        },
-                                        modifier = Modifier.size(32.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Delete,
-                                            contentDescription = "삭제",
-                                            tint = MaterialTheme.colorScheme.error
-                                        )
+                                        // 삭제 버튼
+                                        IconButton(
+                                            onClick = {
+                                                onSaveTargets(savedTargets.filterNot { it.id == item.id })
+                                            },
+                                            modifier = Modifier.size(36.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Delete,
+                                                contentDescription = "삭제",
+                                                tint = MaterialTheme.colorScheme.error
+                                            )
+                                        }
                                     }
                                 }
                             }
