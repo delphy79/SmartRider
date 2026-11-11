@@ -196,12 +196,20 @@ class ArrivalRepository(private val context: Context? = null) {
                     if (targetSubwayId.isNotEmpty()) item.subwayId == targetSubwayId
                     else true
                 }
-                // 2) 이미 출발하여 떠나간 열차 및 당역 종착 열차(예: 서울역에서 '서울행') 제외
+                // 2) 이미 출발하여 떠나간 열차, 당역 종착 열차, 및 공항철도 직통/급행 열차 제외
                 .filterNot { item ->
                     val bstatnClean = item.bstatnNm.removeSuffix("역").trim()
                     val isTerminatingHere = bstatnClean == cleanName || item.trainLineNm.trim().startsWith("${cleanName}행")
                     val hasDeparted = item.arvlCd == "2" || (item.arvlMsg2.contains("출발") && !item.arvlMsg2.contains("전역"))
-                    isTerminatingHere || hasDeparted
+                    val isArex = item.subwayId == "1065" || targetSubwayId == "1065" || ArexTimetableManager.isArex(target)
+                    val isArexExpress = isArex && (
+                        item.btrainSttus.contains("급행") ||
+                        item.btrainSttus.contains("직통") ||
+                        item.trainLineNm.contains("급행") ||
+                        item.trainLineNm.contains("직통") ||
+                        item.btrainNo.startsWith("A1")
+                    )
+                    isTerminatingHere || hasDeparted || isArexExpress
                 }
                 // 3) 사용자 방향/행선지 필터 적용
                 .filter { item ->

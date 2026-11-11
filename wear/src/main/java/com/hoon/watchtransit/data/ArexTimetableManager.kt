@@ -160,8 +160,8 @@ object ArexTimetableManager {
             }
 
             val isExpress = row.isExpress || row.trainNo.startsWith("A1")
-            // 직통열차(A1xxx)는 서울역, 인천공항1터미널, 인천공항2터미널 외의 중간역은 무정차 통과하므로 제외
-            if (isExpress && !EXPRESS_STOP_STATIONS.contains(station)) {
+            // 공항철도 직통/급행 열차는 전체 제외 (일반 완행열차만 표출)
+            if (isExpress) {
                 continue
             }
 
@@ -276,7 +276,7 @@ object ArexTimetableManager {
                 continue
             }
             val isExpress = row.isExpress || row.trainNo.startsWith("A1")
-            if (isExpress && !EXPRESS_STOP_STATIONS.contains(station)) {
+            if (isExpress) {
                 continue
             }
 

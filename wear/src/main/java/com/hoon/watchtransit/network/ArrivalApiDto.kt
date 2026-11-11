@@ -45,6 +45,8 @@ data class SubwayRealtimeItem(
     @SerialName("bstatnNm") val bstatnNm: String = "",         // 종착지하철역명 (예: "방화", "성수", "송도달빛축제공원")
     @SerialName("arvlCd") val arvlCd: String = "",             // 도착코드 (0:진입, 1:도착, 2:출발, 3:전역출발, 4:전역진입, 5:전역도착, 99:운행중)
     @SerialName("ordkey") val ordkey: String = "",             // 순번 키 (예: 01001성수0)
+    @SerialName("btrainNo") val btrainNo: String = "",         // 열차번호 (예: A1028: 직통/급행, A2120: 일반)
+    @SerialName("btrainSttus") val btrainSttus: String = "",   // 열차종류 (일반, 급행, ITX 등)
     @SerialName("recptnDt") val recptnDt: String = ""          // 열차도착정보를 생성한 시각 (예: "2026-11-10 09:05:12")
 )
 
