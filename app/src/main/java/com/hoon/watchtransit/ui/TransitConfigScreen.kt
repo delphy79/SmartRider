@@ -801,15 +801,18 @@ fun TransitConfigScreen(
                         searchKeyword = ""
                         hasSearched = false
                     },
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(20.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFF0288D1),
+                        containerColor = Color(0xFF2A2934),
                         contentColor = Color.White
-                    )
+                    ),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
                 ) {
                     Text(
                         "워치 목록에 추가",
-                        fontWeight = FontWeight.Bold
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White
                     )
                 }
             },
@@ -896,13 +899,19 @@ fun TransitConfigScreen(
                         onSaveTargets(savedTargets + manualTarget)
                         showManualAddDialog = false
                     },
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(20.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFF0288D1),
+                        containerColor = Color(0xFF2A2934),
                         contentColor = Color.White
-                    )
+                    ),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
                 ) {
-                    Text("추가", fontWeight = FontWeight.Bold)
+                    Text(
+                        "추가",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White
+                    )
                 }
             },
             dismissButton = {
