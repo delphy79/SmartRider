@@ -228,15 +228,20 @@ fun TransitConfigScreen(
                         }
                         Button(
                             onClick = { applyEditMode() },
-                            shape = RoundedCornerShape(12.dp),
+                            shape = RoundedCornerShape(20.dp),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFF0288D1),
+                                containerColor = Color(0xFF2A2934),
                                 contentColor = Color.White
                             ),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
                             modifier = Modifier.padding(end = 8.dp)
                         ) {
-                            Text("순서편집 완료", fontWeight = FontWeight.Bold, color = Color.White)
+                            Text(
+                                "순서편집 완료",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color.White
+                            )
                         }
                     }
                 }
