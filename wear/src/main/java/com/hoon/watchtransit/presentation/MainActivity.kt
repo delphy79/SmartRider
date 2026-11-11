@@ -10,7 +10,6 @@ import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Bundle
-import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -22,6 +21,9 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.pointerInput
+import kotlin.math.abs
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -129,7 +131,6 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun WatchAppScreen(storage: TransitWatchStorage, repository: ArrivalRepository) {
     val context = LocalContext.current
-    val activity = context as? ComponentActivity
     val targets by storage.savedTargetsFlow.collectAsState(initial = emptyList())
     val coroutineScope = rememberCoroutineScope()
 
@@ -137,11 +138,25 @@ fun WatchAppScreen(storage: TransitWatchStorage, repository: ArrivalRepository) 
     var arrivalList by remember { mutableStateOf<List<ArrivalInfo>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
 
-    // 1. 현재 위치 상태 관리 (가장 가까운 곳 자동 스크롤)
+    // 1. 현재 위치 상태 관리 (가장 가까운 곳 자동 스크롤 및 스와이프 새로고침)
     var isLocating by remember { mutableStateOf(true) }
+    var isRefreshingLocation by remember { mutableStateOf(false) }
     var userLocation by remember { mutableStateOf<Location?>(null) }
     val listState = rememberScalingLazyListState()
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { arrivalList.size.coerceAtLeast(1) })
+
+    fun refreshLocation() {
+        if (isRefreshingLocation) return
+        isRefreshingLocation = true
+        coroutineScope.launch {
+            val fresh = getFreshLocation(context)
+            if (fresh != null) {
+                userLocation = fresh
+                TransitLocationCache.saveLocation(context, fresh)
+            }
+            isRefreshingLocation = false
+        }
+    }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -149,28 +164,34 @@ fun WatchAppScreen(storage: TransitWatchStorage, repository: ArrivalRepository) 
         val fine = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true
         val coarse = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
         if (fine || coarse) {
-            requestUserLocation(context) { loc -> userLocation = loc }
+            coroutineScope.launch {
+                val fresh = getFreshLocation(context)
+                if (fresh != null) {
+                    userLocation = fresh
+                    TransitLocationCache.saveLocation(context, fresh)
+                }
+                isLocating = false
+            }
         }
     }
 
     LaunchedEffect(Unit) {
+        val cached = TransitLocationCache.getCachedLocation(context) ?: getLastKnownUserLocation(context)
+        if (cached != null) {
+            userLocation = cached
+            isLocating = false
+        }
+
         val hasFine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         val hasCoarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
         if (hasFine || hasCoarse) {
-            withTimeoutOrNull(2500L) {
-                suspendCancellableCoroutine { cont ->
-                    requestUserLocation(context) { loc ->
-                        userLocation = loc
-                        TransitLocationCache.saveLocation(context, loc)
-                        if (cont.isActive) cont.resume(Unit) {}
-                    }
-                }
+            val fresh = getFreshLocation(context)
+            if (fresh != null) {
+                userLocation = fresh
+                TransitLocationCache.saveLocation(context, fresh)
             }
         } else {
             permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
-        }
-        if (userLocation == null) {
-            userLocation = TransitLocationCache.getCachedLocation(context)
         }
         isLocating = false
     }
@@ -182,11 +203,14 @@ fun WatchAppScreen(storage: TransitWatchStorage, repository: ArrivalRepository) 
         if (userLocation == null || targets.isEmpty()) {
             null
         } else {
-            // 1. 현재 위치에서 가장 가까운 순으로 인덱스 정렬
-            val sortedIndices = targets.indices.sortedBy { idx ->
-                getDistanceMeters(userLocation, targets[idx]) ?: Float.MAX_VALUE
+            // 1. 유효한 거리가 측정된 타깃만 거리순 정렬 (좌표 없는 항목 제외)
+            val targetsWithDist = targets.indices.mapNotNull { idx ->
+                val dist = getDistanceMeters(userLocation, targets[idx])
+                if (dist != null) idx to dist else null
             }
-            val bestIdx = sortedIndices.firstOrNull() ?: return@remember null
+            if (targetsWithDist.isEmpty()) return@remember null
+
+            val bestIdx = targetsWithDist.minByOrNull { it.second }?.first ?: return@remember null
             val bestTarget = targets[bestIdx]
             val bestBaseName = bestTarget.name.split("(")[0].removeSuffix("역").trim()
 
@@ -222,23 +246,13 @@ fun WatchAppScreen(storage: TransitWatchStorage, repository: ArrivalRepository) 
     }
 
     // 앱 실행 후 위치 획득 완료 시 목록이 먼저 표출되고, 가장 가까운 역으로 자동 스크롤
-    LaunchedEffect(isLocating, closestIndex) {
-        if (!isLocating && closestIndex != null && closestIndex >= 0 && selectedTarget == null) {
+    LaunchedEffect(isLocating, isRefreshingLocation, closestIndex) {
+        if (!isLocating && !isRefreshingLocation && closestIndex != null && closestIndex >= 0 && selectedTarget == null) {
             listState.animateScrollToItem(closestIndex)
         }
     }
 
-    // 2. 실시간 정보 보는 중에는 워치가 꺼지지 않도록 화면 켜짐 유지 (FLAG_KEEP_SCREEN_ON)
-    DisposableEffect(selectedTarget != null) {
-        if (selectedTarget != null) {
-            activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        }
-        onDispose {
-            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        }
-    }
-
-    // 3. 1초마다 자동 카운트다운 갱신 및 15초 주기 백그라운드 데이터 동기화
+    // 2. 1초마다 자동 카운트다운 갱신 및 15초 주기 백그라운드 데이터 동기화
     var secondsOffset by remember { mutableStateOf(0) }
     LaunchedEffect(selectedTarget) {
         secondsOffset = 0
@@ -287,87 +301,154 @@ fun WatchAppScreen(storage: TransitWatchStorage, repository: ArrivalRepository) 
                     )
                 }
             } else if (selectedTarget == null) {
-                // 1. 역/정류장 목록 화면
-                if (targets.isEmpty()) {
-                    Text(
-                        text = "스마트폰 앱에서\n역/정류장을 먼저\n설정해 주세요.",
-                        textAlign = TextAlign.Center,
-                        color = Color.Gray,
-                        fontSize = 13.sp
-                    )
-                } else {
-                    ScalingLazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        state = listState,
-                        autoCentering = AutoCenteringParams(itemIndex = 0)
-                    ) {
-                        items(targets.size) { idx ->
-                            val item = targets[idx]
-                            val isClosest = idx == closestIndex
-                            val dist = getDistanceMeters(userLocation, item)
-                            val distText = if (dist != null) {
-                                if (dist < 1000) " · ${dist.toInt()}m" else " · ${(dist / 1000f).let { String.format("%.1fkm", it) }}"
-                            } else ""
+                // 1. 역/정류장 목록 화면 (화면을 왼쪽으로 스와이프 시 위치 정보 새로고침)
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(Unit) {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    val down = awaitFirstDown(requireUnconsumed = false)
+                                    var totalDragX = 0f
+                                    var totalDragY = 0f
+                                    var isLeftSwipe = false
 
-                            Chip(
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                onClick = {
-                                    selectedTarget = item
-                                    refreshArrival(item)
-                                },
-                                label = {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Text(
-                                            text = item.name,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 15.sp,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                        if (isClosest) {
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text(
-                                                text = "📍",
-                                                fontSize = 9.sp,
-                                                color = Color(0xFFFFD54F),
-                                                fontWeight = FontWeight.Bold
-                                            )
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                        if (!change.pressed) break
+
+                                        val dx = change.position.x - change.previousPosition.x
+                                        val dy = change.position.y - change.previousPosition.y
+                                        totalDragX += dx
+                                        totalDragY += dy
+
+                                        if (totalDragX < -60f && abs(totalDragX) > abs(totalDragY) * 1.5f) {
+                                            isLeftSwipe = true
                                         }
                                     }
-                                },
-                                secondaryLabel = {
-                                    val subText = if (item.type == TransitType.BUS) {
-                                        val arsId = item.targetCode.ifEmpty { item.subCode.split("|")[0].trim() }
-                                        "ARS ID: $arsId"
-                                    } else {
-                                        val dirText = formatDirection(item)
-                                        if (dirText.isNotEmpty() && dirText != "ALL" && !dirText.contains("|")) {
-                                            "${item.subCode} · $dirText"
-                                        } else {
-                                            item.subCode
-                                        }
+
+                                    if (isLeftSwipe) {
+                                        refreshLocation()
                                     }
-                                    Text(
-                                        text = subText,
-                                        fontSize = 12.sp,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                },
-                                colors = if (isClosest) {
-                                    ChipDefaults.gradientBackgroundChipColors(
-                                        startBackgroundColor = MaterialTheme.colors.primary.copy(alpha = 0.5f),
-                                        endBackgroundColor = MaterialTheme.colors.surface
-                                    )
-                                } else {
-                                    ChipDefaults.primaryChipColors()
                                 }
-                            )
+                            }
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (targets.isEmpty()) {
+                        Text(
+                            text = "스마트폰 앱에서\n역/정류장을 먼저\n설정해 주세요.",
+                            textAlign = TextAlign.Center,
+                            color = Color.Gray,
+                            fontSize = 13.sp
+                        )
+                    } else {
+                        ScalingLazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            state = listState,
+                            autoCentering = AutoCenteringParams(itemIndex = 0)
+                        ) {
+                            items(targets.size) { idx ->
+                                val item = targets[idx]
+                                val isClosest = idx == closestIndex
+                                val dist = getDistanceMeters(userLocation, item)
+                                val distText = if (dist != null) {
+                                    if (dist < 1000) " · ${dist.toInt()}m" else " · ${(dist / 1000f).let { String.format("%.1fkm", it) }}"
+                                } else ""
+
+                                Chip(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                    onClick = {
+                                        selectedTarget = item
+                                        refreshArrival(item)
+                                    },
+                                    label = {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Text(
+                                                text = item.name,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 15.sp,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            if (isClosest) {
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Text(
+                                                    text = "📍",
+                                                    fontSize = 9.sp,
+                                                    color = Color(0xFFFFD54F),
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                        }
+                                    },
+                                    secondaryLabel = {
+                                        val subText = if (item.type == TransitType.BUS) {
+                                            val arsId = item.targetCode.ifEmpty { item.subCode.split("|")[0].trim() }
+                                            "ARS ID: $arsId$distText"
+                                        } else {
+                                            val dirText = formatDirection(item)
+                                            if (dirText.isNotEmpty() && dirText != "ALL" && !dirText.contains("|")) {
+                                                "${item.subCode} · $dirText$distText"
+                                            } else {
+                                                "${item.subCode}$distText"
+                                            }
+                                        }
+                                        Text(
+                                            text = subText,
+                                            fontSize = 12.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    },
+                                    colors = if (isClosest) {
+                                        ChipDefaults.gradientBackgroundChipColors(
+                                            startBackgroundColor = MaterialTheme.colors.primary.copy(alpha = 0.5f),
+                                            endBackgroundColor = MaterialTheme.colors.surface
+                                        )
+                                    } else {
+                                        ChipDefaults.primaryChipColors()
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    if (isRefreshingLocation) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = 0.65f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(Color(0xFF1E293B))
+                                    .border(1.dp, Color(0xFF334155), RoundedCornerShape(16.dp))
+                                    .padding(horizontal = 16.dp, vertical = 10.dp)
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(24.dp),
+                                    strokeWidth = 2.5.dp,
+                                    indicatorColor = MaterialTheme.colors.primary
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    text = "위치 새로고침 중...",
+                                    fontSize = 12.sp,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
                         }
                     }
                 }
@@ -759,48 +840,76 @@ private fun isSoonByRemaining(arrival: ArrivalInfo, secondsOffset: Int): Boolean
 }
 
 /**
- * GPS/Network 위치 1회 요청 헬퍼
+ * 마지막으로 알려진 단말 위치(GPS, Network, Passive) 조회
  */
 @SuppressLint("MissingPermission")
-private fun requestUserLocation(context: Context, onLocation: (Location) -> Unit) {
-    val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return
+private fun getLastKnownUserLocation(context: Context): Location? {
+    val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return null
     val gps = runCatching { lm.getLastKnownLocation(LocationManager.GPS_PROVIDER) }.getOrNull()
     val net = runCatching { lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER) }.getOrNull()
     val passive = runCatching { lm.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER) }.getOrNull()
+    return listOfNotNull(gps, net, passive).maxByOrNull { it.time }
+}
 
-    val best = listOfNotNull(gps, net, passive).maxByOrNull { it.time }
-    if (best != null) {
-        onLocation(best)
-    }
+/**
+ * 실시간 단말 위치를 새로 수신하는 suspend 헬퍼 (GPS 및 Network 프로바이더 동시 등록)
+ */
+@SuppressLint("MissingPermission")
+private suspend fun getFreshLocation(context: Context): Location? = withTimeoutOrNull(5000L) {
+    suspendCancellableCoroutine { cont ->
+        val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+        if (lm == null) {
+            cont.resume(null) {}
+            return@suspendCancellableCoroutine
+        }
 
-    runCatching {
         val listener = object : LocationListener {
-            override fun onLocationChanged(location: Location) {
-                onLocation(location)
-                lm.removeUpdates(this)
+            override fun onLocationChanged(loc: Location) {
+                if (cont.isActive) {
+                    cont.resume(loc) {}
+                }
+                runCatching { lm.removeUpdates(this) }
+            }
+            override fun onProviderDisabled(provider: String) {}
+            override fun onProviderEnabled(provider: String) {}
+            @Deprecated("Deprecated in Java")
+            override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+        }
+
+        var requested = false
+        val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+        for (provider in providers) {
+            if (lm.isProviderEnabled(provider)) {
+                runCatching {
+                    lm.requestSingleUpdate(provider, listener, context.mainLooper)
+                    requested = true
+                }
             }
         }
-        val provider = if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) LocationManager.GPS_PROVIDER else LocationManager.NETWORK_PROVIDER
-        lm.requestSingleUpdate(provider, listener, null)
+
+        if (!requested) {
+            cont.resume(getLastKnownUserLocation(context)) {}
+        }
+
+        cont.invokeOnCancellation {
+            runCatching { lm.removeUpdates(listener) }
+        }
     }
 }
 
 /**
  * 정류장/지하철역 좌표 조회 (타깃 자체 lat/lon 우선, 부재 시 주요 역 사전 매핑)
  */
-private fun getStationLocation(target: TransitTarget): Pair<Double, Double> {
+private fun getStationLocation(target: TransitTarget): Pair<Double, Double>? {
     if (target.lat != 0.0 && target.lon != 0.0) {
         return Pair(target.lat, target.lon)
     }
-    SubwayCoordinates.get(target.name)?.let {
-        return it
-    }
-    return Pair(37.5, 127.0)
+    return SubwayCoordinates.get(target.name)
 }
 
 private fun getDistanceMeters(userLoc: Location?, target: TransitTarget): Float? {
     if (userLoc == null) return null
-    val (tLat, tLon) = getStationLocation(target)
+    val (tLat, tLon) = getStationLocation(target) ?: return null
     val res = FloatArray(1)
     Location.distanceBetween(userLoc.latitude, userLoc.longitude, tLat, tLon, res)
     return res[0]

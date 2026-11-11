@@ -1,6 +1,7 @@
 package com.hoon.watchtransit.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
@@ -15,6 +16,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DirectionsBus
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Menu
@@ -25,6 +28,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
+import com.hoon.watchtransit.R
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -169,36 +174,49 @@ fun TransitConfigScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        if (isEditMode) "워치 목록 순서 편집" else "대중교통 알림 설정",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold
-                    )
+                    if (isEditMode) {
+                        Text(
+                            "목록 순서 편집",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    } else {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_subway_settings),
+                            contentDescription = "스마트라이더",
+                            tint = Color.White,
+                            modifier = Modifier
+                                .padding(start = 4.dp)
+                                .size(34.dp)
+                        )
+                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    titleContentColor = MaterialTheme.colorScheme.onSurface
+                    containerColor = Color(0xFF121318),
+                    titleContentColor = Color.White
                 ),
                 actions = {
                     if (!isEditMode) {
-                        FilledTonalButton(
+                        Button(
                             onClick = {
                                 manualStopName = searchKeyword
                                 manualStopNo = if (searchKeyword.all { it.isDigit() }) searchKeyword else ""
                                 showManualAddDialog = true
                             },
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.filledTonalButtonColors(
-                                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                            shape = RoundedCornerShape(20.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF2A2934),
+                                contentColor = Color.White
                             ),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
                             modifier = Modifier.padding(end = 8.dp)
                         ) {
                             Text(
                                 "정류소 직접입력",
                                 style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.SemiBold
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color.White
                             )
                         }
                     } else {
@@ -206,19 +224,19 @@ fun TransitConfigScreen(
                             onClick = { cancelEditMode() },
                             modifier = Modifier.padding(end = 4.dp)
                         ) {
-                            Text("취소", color = MaterialTheme.colorScheme.outline)
+                            Text("취소", color = Color(0xFF8E9AA8))
                         }
-                        FilledTonalButton(
+                        Button(
                             onClick = { applyEditMode() },
                             shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.filledTonalButtonColors(
-                                containerColor = MaterialTheme.colorScheme.primary,
-                                contentColor = MaterialTheme.colorScheme.onPrimary
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF0288D1),
+                                contentColor = Color.White
                             ),
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                             modifier = Modifier.padding(end = 8.dp)
                         ) {
-                            Text("순서편집 완료", fontWeight = FontWeight.Bold)
+                            Text("순서편집 완료", fontWeight = FontWeight.Bold, color = Color.White)
                         }
                     }
                 }
@@ -252,11 +270,17 @@ fun TransitConfigScreen(
                             singleLine = true,
                             maxLines = 1,
                             shape = RoundedCornerShape(14.dp),
-                            label = { Text("버스 검색 지역", maxLines = 1) },
+                            label = { Text("버스 검색 지역", maxLines = 1, color = Color(0xFF8E9AA8)) },
                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = cityDropdownExpanded) },
                             colors = OutlinedTextFieldDefaults.colors(
-                                focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant
+                                focusedContainerColor = Color(0xFF1E1F21),
+                                unfocusedContainerColor = Color(0xFF1E1F21),
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedBorderColor = Color.Transparent,
+                                unfocusedBorderColor = Color.Transparent,
+                                focusedLabelColor = Color(0xFF8E9AA8),
+                                unfocusedLabelColor = Color(0xFF8E9AA8)
                             ),
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -265,25 +289,34 @@ fun TransitConfigScreen(
 
                         ExposedDropdownMenu(
                             expanded = cityDropdownExpanded,
-                            onDismissRequest = { cityDropdownExpanded = false }
+                            onDismissRequest = { cityDropdownExpanded = false },
+                            modifier = Modifier.background(Color(0xFF1E2026))
                         ) {
                             OutlinedTextField(
                                 value = cityFilterQuery,
                                 onValueChange = { cityFilterQuery = it },
-                                placeholder = { Text("도시명 검색 (예: 서울, 인천, 과천)", maxLines = 1) },
+                                placeholder = { Text("도시명 검색 (예: 서울, 인천, 과천)", maxLines = 1, color = Color(0xFF64748B)) },
                                 singleLine = true,
                                 maxLines = 1,
                                 shape = RoundedCornerShape(10.dp),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedContainerColor = Color(0xFF121318),
+                                    unfocusedContainerColor = Color(0xFF121318),
+                                    focusedTextColor = Color.White,
+                                    unfocusedTextColor = Color.White,
+                                    focusedBorderColor = Color(0xFF2C2F38),
+                                    unfocusedBorderColor = Color(0xFF2C2F38)
+                                ),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(horizontal = 12.dp, vertical = 6.dp)
                             )
 
-                            HorizontalDivider()
+                            HorizontalDivider(color = Color(0xFF23252C))
 
                             filteredCityList.forEach { city ->
                                 DropdownMenuItem(
-                                    text = { Text(city.name) },
+                                    text = { Text(city.name, color = Color.White) },
                                     onClick = {
                                         selectedCity = city
                                         coroutineScope.launch {
@@ -297,7 +330,7 @@ fun TransitConfigScreen(
 
                             if (filteredCityList.isEmpty()) {
                                 DropdownMenuItem(
-                                    text = { Text("일치하는 도시가 없습니다.", color = MaterialTheme.colorScheme.outline) },
+                                    text = { Text("일치하는 도시가 없습니다.", color = Color(0xFF8E9AA8)) },
                                     onClick = {}
                                 )
                             }
@@ -315,9 +348,10 @@ fun TransitConfigScreen(
                             onValueChange = { searchKeyword = it },
                             placeholder = {
                                 Text(
-                                    "지하철역명 / 정류소명(번호)",
+                                    "지하철역명 / 정류장명 (번호)",
                                     maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
+                                    overflow = TextOverflow.Ellipsis,
+                                    color = Color(0xFF64748B)
                                 )
                             },
                             singleLine = true,
@@ -326,8 +360,12 @@ fun TransitConfigScreen(
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                             keyboardActions = KeyboardActions(onSearch = { performSearch() }),
                             colors = OutlinedTextFieldDefaults.colors(
-                                focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant
+                                focusedContainerColor = Color(0xFF1F2025),
+                                unfocusedContainerColor = Color(0xFF1F2025),
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedBorderColor = Color.Transparent,
+                                unfocusedBorderColor = Color.Transparent
                             ),
                             modifier = Modifier
                                 .weight(1f)
@@ -337,8 +375,8 @@ fun TransitConfigScreen(
                             onClick = { performSearch() },
                             shape = RoundedCornerShape(14.dp),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary,
-                                contentColor = MaterialTheme.colorScheme.onPrimary
+                                containerColor = Color(0xFF2B2A31),
+                                contentColor = Color.White
                             ),
                             contentPadding = PaddingValues(0.dp),
                             modifier = Modifier.size(56.dp)
@@ -346,7 +384,8 @@ fun TransitConfigScreen(
                             Icon(
                                 Icons.Default.Search,
                                 contentDescription = "검색",
-                                modifier = Modifier.size(26.dp)
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp)
                             )
                         }
                     }
@@ -373,7 +412,7 @@ fun TransitConfigScreen(
                         items(searchResults, key = { "${it.type}_${it.targetCode}_${it.subCode}" }) { result ->
                             Card(
                                 shape = RoundedCornerShape(14.dp),
-                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E2026)),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
@@ -390,42 +429,38 @@ fun TransitConfigScreen(
                                 ) {
                                     Column(modifier = Modifier.weight(1f)) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
+                                            val isSubway = result.type == TransitType.SUBWAY
                                             Surface(
-                                                color = if (result.type == TransitType.SUBWAY)
-                                                    MaterialTheme.colorScheme.primary
-                                                else
-                                                    MaterialTheme.colorScheme.secondary,
+                                                color = if (isSubway) Color(0xFF0288D1) else Color(0xFF6BD8B0),
                                                 shape = RoundedCornerShape(6.dp),
                                                 modifier = Modifier.padding(end = 8.dp)
                                             ) {
                                                 Text(
-                                                    text = if (result.type == TransitType.SUBWAY) "지하철" else "버스",
+                                                    text = if (isSubway) "지하철" else "버스",
                                                     style = MaterialTheme.typography.labelSmall,
                                                     fontWeight = FontWeight.Bold,
-                                                    color = if (result.type == TransitType.SUBWAY)
-                                                        MaterialTheme.colorScheme.onPrimary
-                                                    else
-                                                        MaterialTheme.colorScheme.onSecondary,
+                                                    color = if (isSubway) Color.White else Color(0xFF0F172A),
                                                     modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
                                                 )
                                             }
                                             Text(
                                                 "${result.name} (${result.subCode})",
                                                 style = MaterialTheme.typography.bodyLarge,
-                                                fontWeight = FontWeight.SemiBold
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = Color.White
                                             )
                                         }
                                         Spacer(modifier = Modifier.height(2.dp))
                                         Text(
                                             "고유코드: ${result.targetCode}",
                                             style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            color = Color(0xFF8E9AA8)
                                         )
                                     }
                                     Icon(
                                         Icons.Default.Add,
                                         contentDescription = "추가",
-                                        tint = MaterialTheme.colorScheme.primary
+                                        tint = Color.White
                                     )
                                 }
                             }
@@ -469,41 +504,43 @@ fun TransitConfigScreen(
                 )
             }
 
-            // 4. 워치 표시 목록 헤더 및 [편집] 버튼
+            // 4. 위치 표시 목록 헤더 및 [순서편집] 버튼
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    if (isEditMode) "워치 표시 순서 (${editingTargets.size}개)"
-                    else "워치 표시 목록 (${savedTargets.size}개)",
+                    if (isEditMode) "위치 표시 순서 (${editingTargets.size}개)"
+                    else "위치 표시 목록 (${savedTargets.size}개)",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onBackground
+                    color = Color.White
                 )
 
                 if (!isEditMode) {
-                    FilledTonalButton(
+                    Button(
                         onClick = { startEditMode() },
                         enabled = savedTargets.isNotEmpty(),
                         shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.filledTonalButtonColors(
-                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                            contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF282830),
+                            contentColor = Color.White
                         ),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                     ) {
                         Icon(
                             Icons.Default.SwapVert,
                             contentDescription = null,
+                            tint = Color.White,
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
                             "순서편집",
                             style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color.White
                         )
                     }
                 }
@@ -709,7 +746,7 @@ fun TransitConfigScreen(
         AlertDialog(
             onDismissRequest = { pendingTarget = null },
             shape = RoundedCornerShape(20.dp),
-            containerColor = MaterialTheme.colorScheme.surface,
+            containerColor = Color(0xFF1E2026),
             title = {
                 Text(
                     "${target.name} 세부 설정",
@@ -734,8 +771,8 @@ fun TransitConfigScreen(
                         singleLine = true,
                         shape = RoundedCornerShape(12.dp),
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant
+                            focusedContainerColor = Color(0xFF121318),
+                            unfocusedContainerColor = Color(0xFF121318)
                         ),
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -761,8 +798,8 @@ fun TransitConfigScreen(
                     },
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary
+                        containerColor = Color(0xFF0288D1),
+                        contentColor = Color.White
                     )
                 ) {
                     Text(
@@ -784,7 +821,7 @@ fun TransitConfigScreen(
         AlertDialog(
             onDismissRequest = { showManualAddDialog = false },
             shape = RoundedCornerShape(20.dp),
-            containerColor = MaterialTheme.colorScheme.surface,
+            containerColor = Color(0xFF1E2026),
             title = {
                 Text(
                     "정류소 직접 입력 추가",
@@ -806,8 +843,8 @@ fun TransitConfigScreen(
                         singleLine = true,
                         shape = RoundedCornerShape(12.dp),
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant
+                            focusedContainerColor = Color(0xFF121318),
+                            unfocusedContainerColor = Color(0xFF121318)
                         ),
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -818,8 +855,8 @@ fun TransitConfigScreen(
                         singleLine = true,
                         shape = RoundedCornerShape(12.dp),
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant
+                            focusedContainerColor = Color(0xFF121318),
+                            unfocusedContainerColor = Color(0xFF121318)
                         ),
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -830,8 +867,8 @@ fun TransitConfigScreen(
                         singleLine = true,
                         shape = RoundedCornerShape(12.dp),
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant
+                            focusedContainerColor = Color(0xFF121318),
+                            unfocusedContainerColor = Color(0xFF121318)
                         ),
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -856,8 +893,8 @@ fun TransitConfigScreen(
                     },
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary
+                        containerColor = Color(0xFF0288D1),
+                        contentColor = Color.White
                     )
                 ) {
                     Text("추가", fontWeight = FontWeight.Bold)

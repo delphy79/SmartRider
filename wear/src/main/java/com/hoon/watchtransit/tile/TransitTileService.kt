@@ -133,49 +133,104 @@ class TransitTileService : TileService() {
 
         val dirStr = formatDirection(target, firstArrival)
 
-        val arrivalTimeStr = if (firstArrival == null) {
-            "도착 정보 없음"
-        } else {
-            val remain = if (firstArrival.remainSeconds > 0) {
-                firstArrival.remainSeconds
-            } else {
-                getTimetableRemainSeconds(firstArrival.arrivalTime) ?: ArrivalRepository.getEffectiveRemainSeconds(firstArrival)
-            }
-            formatRemainSecondsForTile(remain, firstArrival.arrivalTime)
-        }
-
-        val secondTimeStr = if (secondArrival == null) {
-            ""
-        } else {
-            val secRemain = if (secondArrival.remainSeconds > 0) {
-                secondArrival.remainSeconds
-            } else {
-                getTimetableRemainSeconds(secondArrival.arrivalTime) ?: ArrivalRepository.getEffectiveRemainSeconds(secondArrival)
-            }
-            if (secRemain > 0) formatRemainSecondsForTile(secRemain, secondArrival.arrivalTime) else ""
-        }
-
-        // 3. 타일 단일 레이아웃 생성 (폰트 확대 및 상하 여백 최적화)
-        val layout = buildMainLayout(
+        // 3. 5초 단위 동적 타임라인 생성 (2분 분량 실시간 자동 전진)
+        val timeline = buildDynamicTimeline(
             target = target,
             direction = dirStr,
-            arrivalTime = arrivalTimeStr,
-            secondArrival = secondTimeStr
+            firstArrival = firstArrival,
+            secondArrival = secondArrival
         )
-
-        val timeline = TimelineBuilders.Timeline.Builder()
-            .addTimelineEntry(
-                TimelineBuilders.TimelineEntry.Builder()
-                    .setLayout(Layout.Builder().setRoot(layout).build())
-                    .build()
-            )
-            .build()
 
         return TileBuilders.Tile.Builder()
             .setResourcesVersion(RESOURCES_VERSION)
             .setTileTimeline(timeline)
-            .setFreshnessIntervalMillis(0L) // 실행/진입 시점에 무조건 즉시 최신 정보로 새로고침
+            .setFreshnessIntervalMillis(30_000L) // 30초 주기 자동 새로고침 (터치 시에는 즉시 LoadAction 새로고침)
             .build()
+    }
+
+    /**
+     * 5초 단위 타임라인 생성 (약 2분 분량, 5초마다 남은 시간 감소 및 실시간 전진)
+     */
+    private fun buildDynamicTimeline(
+        target: TransitTarget,
+        direction: String,
+        firstArrival: ArrivalInfo?,
+        secondArrival: ArrivalInfo?,
+    ): TimelineBuilders.Timeline {
+        val timelineBuilder = TimelineBuilders.Timeline.Builder()
+        val nowMs = System.currentTimeMillis()
+
+        if (firstArrival == null) {
+            val layout = buildMainLayout(
+                target = target,
+                direction = direction,
+                arrivalTime = "도착 정보 없음",
+                secondArrival = "",
+            )
+            timelineBuilder.addTimelineEntry(
+                TimelineBuilders.TimelineEntry.Builder()
+                    .setLayout(Layout.Builder().setRoot(layout).build())
+                    .build()
+            )
+            return timelineBuilder.build()
+        }
+
+        val initialRemain = if (firstArrival.remainSeconds > 0) {
+            firstArrival.remainSeconds
+        } else {
+            getTimetableRemainSeconds(firstArrival.arrivalTime) ?: ArrivalRepository.getEffectiveRemainSeconds(firstArrival)
+        }
+
+        val secondInitialRemain = secondArrival?.let {
+            if (it.remainSeconds > 0) it.remainSeconds else (getTimetableRemainSeconds(it.arrivalTime) ?: ArrivalRepository.getEffectiveRemainSeconds(it))
+        }
+
+        val stepSeconds = 5
+        val maxSteps = 24 // 24 * 5초 = 120초 (2분 분량)
+
+        val steps = if (initialRemain in 1..300) {
+            ((initialRemain + 15) / stepSeconds).coerceIn(1, maxSteps)
+        } else {
+            maxSteps
+        }
+
+        for (step in 0 until steps) {
+            val elapsedSec = step * stepSeconds
+            val entryStartMs = nowMs + elapsedSec * 1000L
+            val entryEndMs = entryStartMs + stepSeconds * 1000L
+
+            val curRemain = (initialRemain - elapsedSec).coerceAtLeast(0)
+            val arrivalTimeStr = formatRemainSecondsForTile(curRemain, firstArrival.arrivalTime)
+
+            val curSecondRemain = secondInitialRemain?.let { (it - elapsedSec).coerceAtLeast(0) }
+            val secondTimeStr = if (curSecondRemain != null && curSecondRemain > 0) {
+                formatRemainSecondsForTile(curSecondRemain, secondArrival.arrivalTime)
+            } else ""
+
+            val layout = buildMainLayout(
+                target = target,
+                direction = direction,
+                arrivalTime = arrivalTimeStr,
+                secondArrival = secondTimeStr,
+            )
+
+            val entryBuilder = TimelineBuilders.TimelineEntry.Builder()
+                .setValidity(
+                    TimelineBuilders.TimeInterval.Builder()
+                        .setStartMillis(entryStartMs)
+                        .apply {
+                            if (step < steps - 1) {
+                                setEndMillis(entryEndMs)
+                            }
+                        }
+                        .build()
+                )
+                .setLayout(Layout.Builder().setRoot(layout).build())
+
+            timelineBuilder.addTimelineEntry(entryBuilder.build())
+        }
+
+        return timelineBuilder.build()
     }
 
     /**
@@ -311,11 +366,12 @@ class TransitTileService : TileService() {
 
         val isImminent = arrivalTime.contains("곧") || (arrivalTime.contains("초") && !arrivalTime.contains("분"))
 
-        // 1. 역명 헤더 (글자 길이에 맞춰 18sp ~ 21sp로 확대)
+        // 1. 역명 헤더 (글자 길이에 맞춰 18sp ~ 21sp로 확대, 역명 탭 시 앱 진입)
         val headerSp = if (target.name.length > 7) 18f else 21f
         val header = Text.Builder()
             .setText(target.name)
             .setMaxLines(1)
+            .setModifiers(openAppClickModifier) // 역명 터치 시 워치 앱 상세 화면으로 진입
             .setFontStyle(
                 LayoutElementBuilders.FontStyle.Builder()
                     .setSize(sp(headerSp))
@@ -400,10 +456,19 @@ class TransitTileService : TileService() {
             .addContent(next)
             .build()
 
+        val refreshClickModifier = ModifiersBuilders.Modifiers.Builder()
+            .setClickable(
+                ModifiersBuilders.Clickable.Builder()
+                    .setId("refresh_tile_action")
+                    .setOnClick(ActionBuilders.LoadAction.Builder().build())
+                    .build()
+            )
+            .build()
+
         return Box.Builder()
             .setWidth(expand())
             .setHeight(expand())
-            .setModifiers(openAppClickModifier) // 중앙 어디든 탭하면 워치 앱 상세 화면으로 진입
+            .setModifiers(refreshClickModifier) // 타일 어디든 탭하면 즉시 실시간 정보 새로고침
             .setHorizontalAlignment(LayoutElementBuilders.HORIZONTAL_ALIGN_CENTER)
             .setVerticalAlignment(LayoutElementBuilders.VERTICAL_ALIGN_CENTER)
             .addContent(column)
@@ -411,6 +476,15 @@ class TransitTileService : TileService() {
     }
 
     private fun buildSearchingLocationLayout(): LayoutElementBuilders.LayoutElement {
+        val refreshClickModifier = ModifiersBuilders.Modifiers.Builder()
+            .setClickable(
+                ModifiersBuilders.Clickable.Builder()
+                    .setId("refresh_searching_tile")
+                    .setOnClick(ActionBuilders.LoadAction.Builder().build())
+                    .build()
+            )
+            .build()
+
         val text = Text.Builder()
             .setText("현재 위치를 검색하고 있습니다.")
             .setMaxLines(2)
@@ -427,6 +501,7 @@ class TransitTileService : TileService() {
         return Box.Builder()
             .setWidth(expand())
             .setHeight(expand())
+            .setModifiers(refreshClickModifier) // 터치 시 위치 및 타일 새로고침
             .setHorizontalAlignment(LayoutElementBuilders.HORIZONTAL_ALIGN_CENTER)
             .setVerticalAlignment(LayoutElementBuilders.VERTICAL_ALIGN_CENTER)
             .addContent(text)
@@ -561,19 +636,16 @@ class TransitTileService : TileService() {
         }
     }
 
-    private fun getStationLocation(target: TransitTarget): Pair<Double, Double> {
+    private fun getStationLocation(target: TransitTarget): Pair<Double, Double>? {
         if (target.lat != 0.0 && target.lon != 0.0) {
             return Pair(target.lat, target.lon)
         }
-        SubwayCoordinates.get(target.name)?.let {
-            return it
-        }
-        return Pair(37.5, 127.0)
+        return SubwayCoordinates.get(target.name)
     }
 
     private fun getDistanceMeters(userLoc: Location?, target: TransitTarget): Float? {
         if (userLoc == null) return null
-        val (tLat, tLon) = getStationLocation(target)
+        val (tLat, tLon) = getStationLocation(target) ?: return null
         val res = FloatArray(1)
         Location.distanceBetween(userLoc.latitude, userLoc.longitude, tLat, tLon, res)
         return res[0]

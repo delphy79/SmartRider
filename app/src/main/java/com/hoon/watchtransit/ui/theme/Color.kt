@@ -2,6 +2,29 @@ package com.hoon.watchtransit.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
+// Midnight Dark Theme Colors (이미지와 100% 일치하는 색상 구조)
+val AppBgDark = Color(0xFF121318)
+val AppSurfaceDark = Color(0xFF121318)
+val CardBgDark = Color(0xFF1E2026)
+val InputBgDark = Color(0xFF1F2025)
+val DropdownBgDark = Color(0xFF1E1F21)
+val ButtonDark = Color(0xFF2B2A31)
+val ManualButtonDark = Color(0xFF2A2934)
+val EditOrderButtonDark = Color(0xFF282830)
+
+// 뱃지 색상 (지하철: 맑은 스카이 블루, 버스: 화사한 민트 그린)
+val SubwayBadgeBlue = Color(0xFF0288D1)
+val SubwayBadgeText = Color.White
+val BusBadgeMint = Color(0xFF6BD8B0)
+val BusBadgeText = Color(0xFF0F172A)
+
+// 텍스트 & 아이콘 색상
+val TextWhite = Color.White
+val TextMuted = Color(0xFF8E9AA8)
+val TextPlaceholder = Color(0xFF64748B)
+val IconMuted = Color(0xFF64748B)
+val DividerDark = Color(0xFF23252C)
+
 // Material Theme Builder Core Colors (Seed / Primary: #E9B110)
 val PrimaryAmber = Color(0xFFE9B110)
 val OnPrimaryAmber = Color(0xFF261A00)
@@ -34,25 +57,25 @@ val OutlineWarm = Color(0xFF827467)
 val OutlineVariantWarm = Color(0xFFD4C3B4)
 
 // Dark Theme Colors
-val PrimaryAmberDark = Color(0xFFFFBA36)
-val OnPrimaryAmberDark = Color(0xFF452B00)
-val PrimaryContainerAmberDark = Color(0xFF634000)
-val OnPrimaryContainerAmberDark = Color(0xFFFFDE9E)
+val PrimaryAmberDark = Color(0xFF0288D1)
+val OnPrimaryAmberDark = Color.White
+val PrimaryContainerAmberDark = Color(0xFF2B2A31)
+val OnPrimaryContainerAmberDark = Color.White
 
-val SecondaryPinkDark = Color(0xFFFFB2B3)
-val OnSecondaryPinkDark = Color(0xFF561D23)
-val SecondaryContainerPinkDark = Color(0xFF723338)
-val OnSecondaryContainerPinkDark = Color(0xFFFFDADA)
+val SecondaryPinkDark = Color(0xFF6BD8B0)
+val OnSecondaryPinkDark = Color(0xFF0F172A)
+val SecondaryContainerPinkDark = Color(0xFF282830)
+val OnSecondaryContainerPinkDark = Color.White
 
-val TertiaryOliveDark = Color(0xFFD6C58B)
-val OnTertiaryOliveDark = Color(0xFF392E03)
-val TertiaryContainerOliveDark = Color(0xFF503F0D)
-val OnTertiaryContainerOliveDark = Color(0xFFF3E1A5)
+val TertiaryOliveDark = Color(0xFF0288D1)
+val OnTertiaryOliveDark = Color.White
+val TertiaryContainerOliveDark = Color(0xFF2A2934)
+val OnTertiaryContainerOliveDark = Color.White
 
-val BackgroundDark = Color(0xFF18120C)
-val OnBackgroundDarkText = Color(0xFFEDE0D4)
-val SurfaceDark = Color(0xFF18120C)
-val OnSurfaceDarkText = Color(0xFFEDE0D4)
-val SurfaceVariantDark = Color(0xFF4E443B)
-val OnSurfaceVariantDark = Color(0xFFD2C4B7)
-val OutlineDark = Color(0xFF9B8E83)
+val BackgroundDark = Color(0xFF121318)
+val OnBackgroundDarkText = Color.White
+val SurfaceDark = Color(0xFF121318)
+val OnSurfaceDarkText = Color.White
+val SurfaceVariantDark = Color(0xFF1E2026)
+val OnSurfaceVariantDark = Color(0xFF8E9AA8)
+val OutlineDark = Color(0xFF64748B)
