@@ -3,6 +3,7 @@
 import android.content.Context
 import android.util.Log
 import com.hoon.watchtransit.data.ArexTimetableManager
+import com.hoon.watchtransit.data.GwacheonBusTimetableManager
 import com.hoon.watchtransit.data.IncheonTimetableManager
 import com.hoon.watchtransit.data.SeoulSubwayTravelTimeManager
 import com.hoon.watchtransit.data.SubwayLocalDatabase
@@ -879,8 +880,28 @@ class ArrivalRepository(private val context: Context? = null) {
                 }
             }
 
+            val liveArrivals = results.filter { it.first < 90000 }.sortedBy { it.first }.map { it.second }
+            if (liveArrivals.isNotEmpty()) {
+                // 실시간 버스가 1대만 있고 과천 마을버스인 경우 2번째 버스는 시간표에서 보충
+                if (liveArrivals.size == 1 && GwacheonBusTimetableManager.isGwacheonVillageBus(target)) {
+                    val timetableList = GwacheonBusTimetableManager.getArrivals(target)
+                    val nextFromTimetable = timetableList.firstOrNull { it.remainSeconds > (liveArrivals[0].remainSeconds + 120) }
+                    if (nextFromTimetable != null) {
+                        return@runCatching (liveArrivals + nextFromTimetable).take(2)
+                    }
+                }
+                return@runCatching liveArrivals.take(2)
+            }
+
+            // 실시간 버스가 없거나 차고지 대기인 경우 과천 마을버스 시간표 우선 표출
+            if (GwacheonBusTimetableManager.isGwacheonVillageBus(target)) {
+                val timetableList = GwacheonBusTimetableManager.getArrivals(target)
+                if (timetableList.isNotEmpty()) {
+                    return@runCatching timetableList
+                }
+            }
+
             results.sortedBy { it.first }.map { it.second }.ifEmpty {
-                // 실시간 버스가 없으면 배차 기반 시간표 안내 생성
                 generateBusTimetableFallback(target)
             }
         }.getOrDefault(emptyList())
@@ -949,6 +970,14 @@ class ArrivalRepository(private val context: Context? = null) {
      * (사용자 요청에 따라 "몇분 몇초" 대신 도착 시각 "HH:mm:ss" 표출)
      */
     private fun generateBusTimetableFallback(target: TransitTarget): List<ArrivalInfo> {
+        // 과천시 마을버스(1, 2, 3, 5번)인 경우 공식 평일 운행 시간표 우선 적용
+        if (GwacheonBusTimetableManager.isGwacheonVillageBus(target)) {
+            val gwacheonArrivals = GwacheonBusTimetableManager.getArrivals(target)
+            if (gwacheonArrivals.isNotEmpty()) {
+                return gwacheonArrivals
+            }
+        }
+
         val now = LocalTime.now()
         val hour = now.hour
         val minute = now.minute
