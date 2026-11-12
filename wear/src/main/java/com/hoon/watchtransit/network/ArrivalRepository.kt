@@ -302,10 +302,16 @@ class ArrivalRepository(private val context: Context? = null) {
         // 공항철도 서울역·인천공항2터미널역 등 시발역이거나 열차 현재 역이 조회 역과 동일한 경우 전역이 없음
         if ((item.subwayId == "1065" && (cleanTarget == "서울" || cleanTarget == "인천공항2터미널")) ||
             (cleanStn.isNotEmpty() && cleanStn == cleanTarget)) {
+            val depTime = runCatching {
+                val sec = calculateEstimatedArrivalSeconds(item, targetStationName)
+                val t = LocalTime.now().plusSeconds(sec.toLong())
+                String.format("%02d:%02d", t.hour, t.minute)
+            }.getOrNull()
+            val depText = if (depTime != null) "$cleanTarget $depTime 출발" else "$cleanTarget 출발 대기"
             return when (item.arvlCd) {
                 "0" -> "당역 진입 ($cleanTarget)"
                 "1" -> "당역 도착 ($cleanTarget)"
-                else -> "출발 대기 ($cleanTarget)"
+                else -> depText
             }
         }
 

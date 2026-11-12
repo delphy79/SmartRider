@@ -2,6 +2,7 @@ package com.hoon.watchtransit.data
 
 import android.content.Context
 import android.util.Log
+import java.time.LocalTime
 import java.util.PriorityQueue
 import java.util.concurrent.ConcurrentHashMap
 
@@ -454,6 +455,12 @@ object SeoulSubwayTravelTimeManager {
      * 현재 몇 번째 전역(어느 역)에 위치하는지 역산
      * 단, 조회 역이 출발역이거나 아직 출발역 출발 시각 전인 경우 "출발 대기 (출발역명)" 반환
      */
+    private fun formatDepartureStatus(stn: String, secUntilDeparture: Int): String {
+        val t = LocalTime.now().plusSeconds(maxOf(0, secUntilDeparture).toLong())
+        val formatted = String.format("%02d:%02d", t.hour, t.minute)
+        return "$stn $formatted 출발"
+    }
+
     fun estimatePositionByRemainSeconds(
         context: Context?,
         lineNum: String?,
@@ -467,7 +474,7 @@ object SeoulSubwayTravelTimeManager {
 
         // 출발역과 조회역이 동일한 경우 시발역이므로 전역이 없음
         if (cleanStart.isNotEmpty() && cleanStart == cleanTarget) {
-            return if (remainSeconds <= 60) "당역 도착 ($cleanTarget)" else "출발 대기 ($cleanTarget)"
+            return if (remainSeconds <= 60) "당역 도착 ($cleanTarget)" else formatDepartureStatus(cleanTarget, remainSeconds)
         }
 
         if (context != null && lineNum != null) {
@@ -484,12 +491,12 @@ object SeoulSubwayTravelTimeManager {
                     ?.let { resolveCanonicalStationName(lineNum, it.removeSuffix("행").trim()) }
 
                 if (startCanonical != null && startCanonical == targetCanonical) {
-                    return if (remainSeconds <= 60) "당역 도착 ($targetCanonical)" else "출발 대기 ($targetCanonical)"
+                    return if (remainSeconds <= 60) "당역 도착 ($targetCanonical)" else formatDepartureStatus(targetCanonical, remainSeconds)
                 }
 
                 // 시발/종착 단말역(이웃이 1개뿐인 역)에서 다른 역(endCanonical)으로 출발하는 열차인 경우 전역이 없음
                 if ((adj[targetCanonical]?.size ?: 0) <= 1 && endCanonical != null && endCanonical != targetCanonical) {
-                    return if (remainSeconds <= 60) "당역 도착 ($targetCanonical)" else "출발 대기 ($targetCanonical)"
+                    return if (remainSeconds <= 60) "당역 도착 ($targetCanonical)" else formatDepartureStatus(targetCanonical, remainSeconds)
                 }
 
                 val upstreamPath = buildUpstreamPath(adj, targetCanonical, startCanonical, endCanonical)
@@ -516,13 +523,13 @@ object SeoulSubwayTravelTimeManager {
                     }
                     // 남은 시간이 시발역까지의 총 소요시간보다 크면 아직 시발역에서 출발하기 전 상태
                     return if (reachedOriginBeforeDeparture && remainSeconds > cumSec) {
-                        "출발 대기 ($chosenStn)"
+                        formatDepartureStatus(chosenStn, remainSeconds - cumSec)
                     } else {
                         "[$chosenHops]번째 전역 ($chosenStn)"
                     }
                 } else if (endCanonical != null && endCanonical != targetCanonical) {
                     // 종착역 반대 방향으로 이전 역이 존재하지 않는 시발역인 경우
-                    return if (remainSeconds <= 60) "당역 도착 ($targetCanonical)" else "출발 대기 ($targetCanonical)"
+                    return if (remainSeconds <= 60) "당역 도착 ($targetCanonical)" else formatDepartureStatus(targetCanonical, remainSeconds)
                 }
             }
         }

@@ -314,6 +314,12 @@ object IncheonTimetableManager {
      * 해당 열차가 현재 몇 번째 전역(어느 역)에 있는지 계산
      * 단, 조회 역이 출발역이거나 아직 출발역 출발 시각 전인 경우 "출발 대기 (출발역명)" 표출
      */
+    private fun formatDepartureStatus(stn: String, secUntilDeparture: Int): String {
+        val t = LocalTime.now().plusSeconds(maxOf(0, secUntilDeparture).toLong())
+        val formatted = String.format("%02d:%02d", t.hour, t.minute)
+        return "$stn $formatted 출발"
+    }
+
     private fun calculateTrainPositionDetail(
         row: SubwayLocalDatabase.TrainScheduleEntity,
         targetIdx: Int,
@@ -323,7 +329,7 @@ object IncheonTimetableManager {
     ): String {
         val stops = row.stops
         if (targetIdx <= 0) {
-            return if (targetSec - nowSec <= 60) "당역 도착 ($targetStation)" else "출발 대기 ($targetStation)"
+            return if (targetSec - nowSec <= 60) "당역 도착 ($targetStation)" else formatDepartureStatus(targetStation, targetSec - nowSec)
         }
 
         if (targetSec - nowSec <= 20) {
@@ -333,7 +339,7 @@ object IncheonTimetableManager {
         // 아직 출발역에서 출발하기 전인 경우
         val originStop = stops[0]
         if (nowSec < originStop.daySeconds) {
-            return "출발 대기 (${originStop.stationName})"
+            return formatDepartureStatus(originStop.stationName, originStop.daySeconds - nowSec)
         }
 
         // 출발역 이후 ~ 도착역 이전: 현재 시각 이하의 가장 최근 통과/정차역 탐색

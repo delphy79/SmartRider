@@ -209,6 +209,12 @@ object ArexTimetableManager {
      * 해당 열차가 현재 몇 번째 전역(어느 역)에 있는지 계산
      * 단, 조회 역이 출발역이거나 아직 출발역 출발 시각 전인 경우 "출발 대기 (출발역명)" 표출
      */
+    private fun formatDepartureStatus(stn: String, secUntilDeparture: Int): String {
+        val t = LocalTime.now().plusSeconds(maxOf(0, secUntilDeparture).toLong())
+        val formatted = String.format("%02d:%02d", t.hour, t.minute)
+        return "$stn $formatted 출발"
+    }
+
     private fun calculateTrainPositionDetail(
         row: SubwayLocalDatabase.TrainScheduleEntity,
         targetStation: String,
@@ -216,7 +222,7 @@ object ArexTimetableManager {
         nowSec: Int
     ): String {
         if (canonicalStationName(row.startStation) == targetStation) {
-            return if (targetSec - nowSec <= 60) "당역 도착 ($targetStation)" else "출발 대기 ($targetStation)"
+            return if (targetSec - nowSec <= 60) "당역 도착 ($targetStation)" else formatDepartureStatus(targetStation, targetSec - nowSec)
         }
 
         val routeStops = row.allRouteStopTimes.mapNotNull { (stn, timeStr) ->
@@ -226,7 +232,7 @@ object ArexTimetableManager {
 
         val targetIdx = routeStops.indexOfLast { it.first == targetStation }
         if (targetIdx <= 0) {
-            return if (targetSec - nowSec <= 60) "당역 도착 ($targetStation)" else "출발 대기 ($targetStation)"
+            return if (targetSec - nowSec <= 60) "당역 도착 ($targetStation)" else formatDepartureStatus(targetStation, targetSec - nowSec)
         }
 
         if (targetSec - nowSec <= 20) {
@@ -236,7 +242,7 @@ object ArexTimetableManager {
         // 아직 출발역에서 출발하기 전인 경우
         if (nowSec < routeStops[0].second) {
             val startStn = routeStops[0].first
-            return "출발 대기 ($startStn)"
+            return formatDepartureStatus(startStn, routeStops[0].second - nowSec)
         }
 
         var currentIdx = 0

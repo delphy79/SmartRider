@@ -821,7 +821,7 @@ private fun extractTime(text: String): String? {
 private fun formatLiveArrivalText(arrival: ArrivalInfo, secondsOffset: Int): String {
     val rawMsg = arrival.arrivalTime.trim()
     val isTimetable = rawMsg.contains("시간표") || rawMsg.contains("🕒") ||
-            arrival.statusDetail.contains("출발 대기") || arrival.statusDetail.contains("시간표") ||
+            arrival.statusDetail.endsWith("출발") || arrival.statusDetail.contains("출발 대기") || arrival.statusDetail.contains("시간표") ||
             extractTime(rawMsg) != null
     val suffix = if (isTimetable) " 🕒" else ""
 
