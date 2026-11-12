@@ -310,7 +310,7 @@ object GwacheonBusTimetableManager {
                 val isSoon = diffSec <= 45
 
                 val arrivalTimeStr = "$arriveTimeFormatted [시간표]"
-                val statusDetail = "${config.originName} $timeStr 출발"
+                val statusDetail = "출발 대기 (${config.originName})"
 
                 candidates.add(
                     ArrivalInfo(
@@ -343,7 +343,7 @@ object GwacheonBusTimetableManager {
                     arrivalTime = "첫차 $firstTime [시간표]",
                     isSoon = false,
                     remainSeconds = diffSec,
-                    statusDetail = "[시간표] 익일 첫차 ${config.originName} $firstTime 출발"
+                    statusDetail = "출발 대기 (${config.originName})"
                 )
             )
         }
