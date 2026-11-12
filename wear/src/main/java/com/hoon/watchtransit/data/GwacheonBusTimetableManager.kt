@@ -149,7 +149,8 @@ object GwacheonBusTimetableManager {
         val text = "${target.name} ${target.subCode} ${target.directionOrRoute}"
         val gwacheonKeywords = listOf(
             "과천", "문원", "궁말", "갈현", "제이드자이", "지식정보타운", "지식산업단지", "지식산업",
-            "별양", "원문", "부림", "중앙동", "과천청사", "정부과천청사", "과천시청", "과천역", "스마트케이"
+            "별양", "원문", "부림", "중앙동", "과천청사", "정부과천청사", "과천시청", "과천역", "스마트케이",
+            "선바위", "경마공원", "양지마을", "용마골"
         )
         return gwacheonKeywords.any { text.contains(it) }
     }
