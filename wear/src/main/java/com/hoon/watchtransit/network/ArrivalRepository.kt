@@ -115,18 +115,21 @@ class ArrivalRepository(private val context: Context? = null) {
 
             return 99999
         }
-    }
-
-    private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
-    private val client = OkHttpClient.Builder().build()
-
-    private val api: ArrivalApiService by lazy {
-        Retrofit.Builder()
-            .baseUrl("https://apis.data.go.kr/")
-            .client(client)
-            .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
-            .build()
-            .create(ArrivalApiService::class.java)
+        private val json by lazy { Json { ignoreUnknownKeys = true; coerceInputValues = true } }
+        private val client by lazy {
+            OkHttpClient.Builder()
+                .connectTimeout(java.time.Duration.ofSeconds(5))
+                .readTimeout(java.time.Duration.ofSeconds(6))
+                .build()
+        }
+        private val api: ArrivalApiService by lazy {
+            Retrofit.Builder()
+                .baseUrl("https://apis.data.go.kr/")
+                .client(client)
+                .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
+                .build()
+                .create(ArrivalApiService::class.java)
+        }
     }
 
     suspend fun fetchArrivals(target: TransitTarget): List<ArrivalInfo> = runCatching {

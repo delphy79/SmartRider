@@ -10,6 +10,9 @@ import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Bundle
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -176,6 +179,14 @@ fun WatchAppScreen(storage: TransitWatchStorage, repository: ArrivalRepository) 
     }
 
     LaunchedEffect(Unit) {
+        // 1. 최근 10분 이내 유효한 캐시 위치가 있으면 하드웨어 GPS 칩을 켜지 않고 즉시 적용 (빠른 로딩 & 배터리 절약)
+        val freshCached = TransitLocationCache.getCachedLocation(context, TransitLocationCache.DEFAULT_MAX_AGE_MS)
+        if (freshCached != null) {
+            userLocation = freshCached
+            isLocating = false
+            return@LaunchedEffect
+        }
+
         val cached = TransitLocationCache.getCachedLocation(context) ?: getLastKnownUserLocation(context)
         if (cached != null) {
             userLocation = cached
@@ -252,13 +263,33 @@ fun WatchAppScreen(storage: TransitWatchStorage, repository: ArrivalRepository) 
         }
     }
 
-    // 2. 1초마다 자동 카운트다운 갱신 및 15초 주기 백그라운드 데이터 동기화
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var isAppResumed by remember { mutableStateOf(true) }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            isAppResumed = event.targetState.isAtLeast(Lifecycle.State.RESUMED)
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    // 2. 앱이 화면에 켜져 있을 때만(RESUMED) 1초마다 카운트다운 갱신 및 15초 주기 데이터 동기화
+    // 화면이 꺼지거나 백그라운드로 내려가면 타이머/네트워크 즉시 일시정지, 복귀 시 즉시 최신화
     var secondsOffset by remember { mutableStateOf(0) }
-    LaunchedEffect(selectedTarget) {
-        secondsOffset = 0
-        if (selectedTarget != null) {
-            pagerState.scrollToPage(0)
-            while (isActive) {
+    LaunchedEffect(selectedTarget, isAppResumed) {
+        if (selectedTarget != null && isAppResumed) {
+            // 화면 복귀 시 경과되었거나 데이터가 비어있으면 즉시 서버 데이터 동기화
+            if (secondsOffset > 5 || arrivalList.isEmpty()) {
+                val updated = repository.fetchArrivals(selectedTarget!!)
+                if (updated.isNotEmpty()) {
+                    arrivalList = updated
+                    secondsOffset = 0
+                }
+            }
+            while (isActive && isAppResumed) {
                 delay(1000L)
                 secondsOffset++
                 // 15초마다 최신 서버 데이터 동기화

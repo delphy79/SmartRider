@@ -96,7 +96,7 @@ class TransitTileService : TileService() {
             return TileBuilders.Tile.Builder()
                 .setResourcesVersion(RESOURCES_VERSION)
                 .setTileTimeline(timeline)
-                .setFreshnessIntervalMillis(15_000L)
+                .setFreshnessIntervalMillis(60_000L)
                 .build()
         }
 
@@ -116,7 +116,7 @@ class TransitTileService : TileService() {
             return TileBuilders.Tile.Builder()
                 .setResourcesVersion(RESOURCES_VERSION)
                 .setTileTimeline(timeline)
-                .setFreshnessIntervalMillis(3_000L) // 위치 획득 대기 (3초 후 재시도)
+                .setFreshnessIntervalMillis(5_000L) // 위치 획득 대기 (5초 후 재시도)
                 .build()
         }
 
@@ -144,7 +144,7 @@ class TransitTileService : TileService() {
         return TileBuilders.Tile.Builder()
             .setResourcesVersion(RESOURCES_VERSION)
             .setTileTimeline(timeline)
-            .setFreshnessIntervalMillis(30_000L) // 30초 주기 자동 새로고침 (터치 시에는 즉시 LoadAction 새로고침)
+            .setFreshnessIntervalMillis(120_000L) // 120초(2분) 주기 자동 새로고침 (동적 타임라인이 2분간 자동 전진, 터치 시 즉시 새로고침)
             .build()
     }
 
@@ -569,7 +569,20 @@ class TransitTileService : TileService() {
 
     @SuppressLint("MissingPermission")
     private suspend fun getOrFetchUserLocation(): Location? {
-        // 앱/타일 실행 시 현재 위치부터 찾기 (최신 GPS/Network 위치 1.2초 대기)
+        // 1. 최근 10분 이내 유효한 캐시 위치가 있으면 즉시 반환 (하드웨어 칩 구동 방지 -> 배터리 대폭 절약 & 즉시 로딩)
+        val freshCached = TransitLocationCache.getCachedLocation(this@TransitTileService, TransitLocationCache.DEFAULT_MAX_AGE_MS)
+        if (freshCached != null) {
+            return freshCached
+        }
+
+        // 2. 단말의 최근 알려진 위치 중 10분 이내 데이터가 있는지 확인
+        val lastKnown = getUserLocation(this@TransitTileService)
+        if (lastKnown != null && (System.currentTimeMillis() - lastKnown.time) <= TransitLocationCache.DEFAULT_MAX_AGE_MS) {
+            TransitLocationCache.saveLocation(this@TransitTileService, lastKnown)
+            return lastKnown
+        }
+
+        // 3. 신선한 위치가 없을 때만 단일 위치 조회 (배터리 소모가 적은 Network Provider 우선)
         val freshLocation = withTimeoutOrNull(1200L) {
             suspendCancellableCoroutine { cont ->
                 val lm = getSystemService(Context.LOCATION_SERVICE) as? LocationManager
@@ -604,7 +617,7 @@ class TransitTileService : TileService() {
                 }
             }
         }
-        return freshLocation ?: TransitLocationCache.getCachedLocation(this@TransitTileService) ?: getUserLocation(this@TransitTileService)
+        return freshLocation ?: TransitLocationCache.getCachedLocation(this@TransitTileService) ?: lastKnown
     }
 
     @SuppressLint("MissingPermission")
@@ -620,18 +633,25 @@ class TransitTileService : TileService() {
 
     @SuppressLint("MissingPermission")
     private fun triggerLocationUpdate() {
+        // 이미 10분 이내 유효한 캐시 위치가 있으면 배터리를 소모하는 GPS/센서 갱신을 생략
+        if (TransitLocationCache.isCacheFresh(this@TransitTileService)) return
+
         runCatching {
             val lm = getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return
-            val provider = if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+            val provider = if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+                LocationManager.NETWORK_PROVIDER
+            } else if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
                 LocationManager.GPS_PROVIDER
             } else {
-                LocationManager.NETWORK_PROVIDER
+                return
             }
             lm.requestSingleUpdate(provider, object : LocationListener {
                 override fun onLocationChanged(location: Location) {
                     TransitLocationCache.saveLocation(this@TransitTileService, location)
                     lm.removeUpdates(this)
                 }
+                override fun onProviderDisabled(provider: String) {}
+                override fun onProviderEnabled(provider: String) {}
             }, null)
         }
     }
